@@ -122,17 +122,8 @@ describe('OAuth Routes Integration Tests', () => {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end('<html><body><h1>Authentication Successful!</h1></body></html>');
         } catch (error) {
-          res.writeHead(500, { 'Content-Type': 'text/html' });
-          res.end(`
-            <!DOCTYPE html>
-            <html>
-            <head><title>Authentication Failed</title></head>
-            <body>
-              <h1>Authentication Failed</h1>
-              <p>Error: ${error.message}</p>
-            </body>
-            </html>
-          `);
+          res.writeHead(302, { 'Location': '/auth/login?error=' + encodeURIComponent(error.message) });
+          res.end();
         }
         return;
       }
@@ -154,7 +145,7 @@ describe('OAuth Routes Integration Tests', () => {
         return;
       }
 
-      if (pathname === '/auth/logout' && req.method === 'GET') {
+      if (pathname === '/auth/logout' && req.method === 'POST') {
         try {
           OAuthManager.logout();
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -256,31 +247,31 @@ describe('OAuth Routes Integration Tests', () => {
       expect(savedTokens.refresh_token).toBe('mock-refresh-token');
     });
 
-    it('should return error if code is missing', async () => {
+    it('should redirect to login with error if code is missing', async () => {
       const response = await request(server)
         .get('/auth/callback?state=test-state');
 
-      expect(response.status).toBe(500);
-      expect(response.text).toContain('Authentication Failed');
-      expect(response.text).toContain('Missing authorization code or state');
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toContain('/auth/login?error=');
+      expect(decodeURIComponent(response.headers.location)).toContain('Missing authorization code or state');
     });
 
-    it('should return error if state is missing', async () => {
+    it('should redirect to login with error if state is missing', async () => {
       const response = await request(server)
         .get('/auth/callback?code=test-code');
 
-      expect(response.status).toBe(500);
-      expect(response.text).toContain('Authentication Failed');
-      expect(response.text).toContain('Missing authorization code or state');
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toContain('/auth/login?error=');
+      expect(decodeURIComponent(response.headers.location)).toContain('Missing authorization code or state');
     });
 
-    it('should return error if state is invalid', async () => {
+    it('should redirect to login with error if state is invalid', async () => {
       const response = await request(server)
         .get('/auth/callback?code=test-code&state=invalid-state');
 
-      expect(response.status).toBe(500);
-      expect(response.text).toContain('Authentication Failed');
-      expect(response.text).toContain('Invalid or expired state parameter');
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toContain('/auth/login?error=');
+      expect(decodeURIComponent(response.headers.location)).toContain('Invalid or expired state parameter');
     });
 
     it('should delete state after successful callback', async () => {
@@ -339,7 +330,7 @@ describe('OAuth Routes Integration Tests', () => {
     });
   });
 
-  describe('GET /auth/logout', () => {
+  describe('POST /auth/logout', () => {
     it('should delete tokens and return success', async () => {
       // Save some tokens first
       const tokens = {
@@ -351,7 +342,7 @@ describe('OAuth Routes Integration Tests', () => {
 
       expect(OAuthManager.isAuthenticated()).toBe(true);
 
-      const response = await request(server).get('/auth/logout');
+      const response = await request(server).post('/auth/logout');
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
@@ -363,13 +354,19 @@ describe('OAuth Routes Integration Tests', () => {
     });
 
     it('should succeed even if no tokens exist', async () => {
-      const response = await request(server).get('/auth/logout');
+      const response = await request(server).post('/auth/logout');
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
         success: true,
         message: 'Logged out successfully'
       });
+    });
+
+    it('should reject GET requests', async () => {
+      const response = await request(server).get('/auth/logout');
+
+      expect(response.status).toBe(404);
     });
   });
 

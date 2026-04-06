@@ -40,6 +40,7 @@ function loadProxyKeys() {
 // PKCE state storage with automatic expiration (10 minutes)
 const pkceStates = new Map();
 const PKCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_PKCE_STATES = 10;
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function cleanupExpiredPKCE() {
@@ -127,6 +128,11 @@ function isLocalRequest(req) {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
 }
 
+const STATIC_SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'",
+  'X-Content-Type-Options': 'nosniff'
+};
+
 function serveStaticFile(res, filePath, contentType) {
   const staticPath = path.join(__dirname, 'static', filePath);
   fs.readFile(staticPath, 'utf8', (err, data) => {
@@ -136,7 +142,11 @@ function serveStaticFile(res, filePath, contentType) {
       res.end('Not found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': contentType });
+    const headers = { 'Content-Type': contentType };
+    if (contentType === 'text/html') {
+      Object.assign(headers, STATIC_SECURITY_HEADERS);
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
@@ -237,6 +247,12 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
     }
   }
 
+  // Static JS for auth pages
+  if (pathname === '/auth/static/login.js' && req.method === 'GET') {
+    serveStaticFile(res, 'login.js', 'application/javascript');
+    return;
+  }
+
   // OAuth Routes
   if (pathname === '/auth/login' && req.method === 'GET') {
     serveStaticFile(res, 'login.html', 'text/html');
@@ -245,6 +261,11 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
 
   if (pathname === '/auth/get-url' && req.method === 'GET') {
     try {
+      if (pkceStates.size >= MAX_PKCE_STATES) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many pending authorization requests' }));
+        return;
+      }
       const pkce = OAuthManager.generatePKCE();
       pkceStates.set(pkce.state, {
         code_verifier: pkce.code_verifier,
@@ -304,18 +325,8 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
       Logger.info('OAuth authentication successful');
     } catch (error) {
       Logger.error('OAuth callback error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'text/html' });
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Authentication Failed</title></head>
-        <body>
-          <h1>Authentication Failed</h1>
-          <p>Error: ${error.message}</p>
-          <p><a href="/auth/login">Try again</a></p>
-        </body>
-        </html>
-      `);
+      res.writeHead(302, { 'Location': '/auth/login?error=' + encodeURIComponent(error.message) });
+      res.end();
     }
     return;
   }
@@ -338,7 +349,7 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
     return;
   }
 
-  if (pathname === '/auth/logout' && req.method === 'GET') {
+  if (pathname === '/auth/logout' && req.method === 'POST') {
     try {
       OAuthManager.logout();
       res.writeHead(200, { 'Content-Type': 'application/json' });

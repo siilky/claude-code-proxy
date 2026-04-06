@@ -74,10 +74,20 @@
       margin: 15px 0;
       color: #ad6800;
     }
+    .error-banner {
+      display: none;
+      background-color: #fff1f0;
+      border-left: 4px solid #ff4d4f;
+      padding: 12px;
+      margin: 0 0 20px 0;
+      color: #a8071a;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <div id="errorBanner" class="error-banner"></div>
     <h1>Authenticate with Claude MAX</h1>
 
     <div class="step">
@@ -116,18 +126,6 @@
     </form>
   </div>
 
-  <script>
-    document.getElementById('authButton').addEventListener('click', async function(e) {
-      e.preventDefault();
-
-      // Get the auth URL from the server
-      const response = await fetch('/auth/get-url');
-      const data = await response.json();
-
-      if (data.url) {
-        window.open(data.url, '_blank');
-      }
-    });
-  </script>
+  <script src="/auth/static/login.js"></script>
 </body>
 </html>
