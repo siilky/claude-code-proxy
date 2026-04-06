@@ -45,11 +45,12 @@ class ClaudeRequest {
   static presetCache = new Map();
   static refreshPromise = null;
 
-  constructor(passthroughToken = null) {
+  constructor(passthroughToken = null, clientName = null) {
     this.API_URL = 'https://api.anthropic.com/v1/messages';
     this.VERSION = '2023-06-01';
     this.BETA_HEADER = 'claude-code-20250219,files-api-2025-04-14,oauth-2025-04-20,interleaved-thinking-2025-05-14';
     this.passthroughToken = passthroughToken;
+    this.logTag = clientName ? `[${clientName}] ` : '';
     this.refreshToken = TOKEN_REFRESH_METHOD === 'OAUTH' ? this.refreshTokenWithOauth : this.refreshTokenWithClaudeCodeCli;
   }
 
@@ -489,13 +490,13 @@ class ClaudeRequest {
       });
 
       req.on('error', (err) => {
-        Logger.error(`Network error connecting to Claude API: ${err.message}`);
+        Logger.error(`${this.logTag}Network error connecting to Claude API: ${err.message}`);
         req.destroy();
         reject(err);
       });
 
       req.setTimeout(120000, () => {
-        Logger.error('Claude API request timed out (120s)');
+        Logger.error(`${this.logTag}Claude API request timed out (120s)`);
         req.destroy();
         reject(new Error('Claude API request timeout'));
       });
@@ -510,34 +511,34 @@ class ClaudeRequest {
       const claudeResponse = await this.makeRequest(body, presetName);
       
       if (claudeResponse.statusCode === 401 && !this.passthroughToken) {
-        Logger.info('Got 401, refreshing token');
+        Logger.info(`${this.logTag}Got 401, refreshing token`);
         OAuthManager.cachedToken = null;
 
         try {
           await this.loadOrRefreshToken();
           const retryResponse = await this.makeRequest(body, presetName);
           res.statusCode = retryResponse.statusCode;
-          Logger.info(`Token refreshed, retry status: ${retryResponse.statusCode}`);
+          Logger.info(`${this.logTag}Token refreshed, retry status: ${retryResponse.statusCode}`);
           Logger.headers('Claude retry response headers', retryResponse.headers);
           ClaudeRequest.forwardResponseHeaders(retryResponse, res);
           this.streamResponse(res, retryResponse);
           return;
         } catch (error) {
           if (error.code === 'INVALID_GRANT') {
-            Logger.warn('Returning re-authorization message to client (401 retry path)');
+            Logger.warn(`${this.logTag}Returning re-authorization message to client (401 retry path)`);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(ClaudeRequest.proxyMessage('OAuth session expired. Please re-authorize.')));
             return;
           }
-          Logger.warn(`Token refresh failed, passing 401 to client: ${error.message}`);
+          Logger.warn(`${this.logTag}Token refresh failed, passing 401 to client: ${error.message}`);
         }
       }
       
       res.statusCode = claudeResponse.statusCode;
       if (claudeResponse.statusCode >= 400) {
-        Logger.warn(`Claude API returned ${claudeResponse.statusCode}`);
+        Logger.warn(`${this.logTag}Claude API returned ${claudeResponse.statusCode}`);
       } else {
-        Logger.debug(`Claude API status: ${claudeResponse.statusCode}`);
+        Logger.debug(`${this.logTag}Claude API status: ${claudeResponse.statusCode}`);
       }
       Logger.headers('Claude response headers', claudeResponse.headers);
       ClaudeRequest.forwardResponseHeaders(claudeResponse, res);
@@ -546,13 +547,13 @@ class ClaudeRequest {
       
     } catch (error) {
       if (error.code === 'INVALID_GRANT') {
-        Logger.warn('Returning re-authorization message to client');
+        Logger.warn(`${this.logTag}Returning re-authorization message to client`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(ClaudeRequest.proxyMessage('OAuth session expired. Please re-authorize.')));
         return;
       }
       const status = error.statusCode || 500;
-      Logger.error(`Claude request error (${status}):`, error.message);
+      Logger.error(`${this.logTag}Claude request error (${status}):`, error.message);
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
@@ -613,7 +614,7 @@ class ClaudeRequest {
       });
 
       const logStats = () => {
-        let msg = `Response: in=${stats.inputTokens}`;
+        let msg = `${this.logTag}Response: in=${stats.inputTokens}`;
         if (stats.cacheCreation || stats.cacheRead) {
           msg += ` (cache_write=${stats.cacheCreation}, cache_read=${stats.cacheRead})`;
         }
@@ -622,7 +623,7 @@ class ClaudeRequest {
       };
 
       claudeResponse.on('error', (err) => {
-        Logger.error(`Claude SSE stream error: ${err.message}`);
+        Logger.error(`${this.logTag}Claude SSE stream error: ${err.message}`);
         if (!res.headersSent) {
           res.writeHead(502, { 'Content-Type': 'application/json' });
         }
@@ -642,7 +643,7 @@ class ClaudeRequest {
         const debugStream = Logger.createDebugStream('Claude SSE', extractClaudeText);
 
         debugStream.on('error', (err) => {
-          Logger.error(`Debug stream processing error: ${err.message}`);
+          Logger.error(`${this.logTag}Debug stream processing error: ${err.message}`);
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
           }
@@ -670,7 +671,7 @@ class ClaudeRequest {
       });
 
       claudeResponse.on('error', (err) => {
-        Logger.error('Claude non-streaming response error:', err);
+        Logger.error(`${this.logTag}Claude non-streaming response error:`, err);
         if (!res.headersSent) {
           res.writeHead(502, { 'Content-Type': 'application/json' });
         }
@@ -686,7 +687,7 @@ class ClaudeRequest {
 
           if (jsonData.usage) {
             const u = jsonData.usage;
-            let msg = `Response: in=${u.input_tokens || 0}`;
+            let msg = `${this.logTag}Response: in=${u.input_tokens || 0}`;
             if (u.cache_creation_input_tokens || u.cache_read_input_tokens) {
               msg += ` (cache_write=${u.cache_creation_input_tokens || 0}, cache_read=${u.cache_read_input_tokens || 0})`;
             }
@@ -699,7 +700,7 @@ class ClaudeRequest {
           res.end(JSON.stringify(jsonData));
           Logger.debug('Non-streaming response sent back to client');
         } catch (e) {
-          Logger.warn(`Non-JSON response from Claude (${claudeResponse.statusCode}), forwarding raw`);
+          Logger.warn(`${this.logTag}Non-JSON response from Claude (${claudeResponse.statusCode}), forwarding raw`);
           res.end(responseData);
         }
       });

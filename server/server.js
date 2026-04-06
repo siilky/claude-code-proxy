@@ -229,6 +229,11 @@ async function handleRequest(req, res) {
 
   Logger.info(`${req.method} ${pathname} from ${clientIP}`);
 
+  res.on('finish', () => {
+    const tag = req.clientName ? ` [${req.clientName}]` : '';
+    Logger.info(`${req.method} ${pathname}${tag} -> ${res.statusCode}`);
+  });
+
   try {
     return await _handleRequest(req, res, clientIP, parsedUrl, pathname);
   } catch (error) {
@@ -416,9 +421,7 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
         res.end(JSON.stringify({ error: "Invalid proxy API key" }));
         return;
       }
-      if (auth.clientName) {
-        Logger.info(`Client: ${auth.clientName}`);
-      }
+      req.clientName = auth.clientName;
 
       Logger.headers("Incoming request headers", req.headers);
       const body = await parseBody(req);
@@ -445,7 +448,7 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
         Logger.debug(`Detected preset: ${presetName}`);
       }
 
-      await new ClaudeRequest(auth.token).handleResponse(res, body, presetName);
+      await new ClaudeRequest(auth.token, auth.clientName).handleResponse(res, body, presetName);
     } catch (error) {
       const status = error.statusCode || 500;
       Logger.error(`Request error (${status}):`, error.message);
