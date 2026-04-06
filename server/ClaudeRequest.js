@@ -330,6 +330,35 @@ class ClaudeRequest {
     return headers;
   }
 
+  static forwardResponseHeaders(source, target) {
+    const ALLOWED_EXACT = new Set([
+      'content-type',
+      'request-id',
+      'retry-after',
+      'cf-ray',
+    ]);
+
+    const ALLOWED_PREFIXES = [
+      'x-ratelimit-',
+      'anthropic-ratelimit-',
+    ];
+
+    const dropped = [];
+
+    for (const key of Object.keys(source.headers)) {
+      const lower = key.toLowerCase();
+      if (ALLOWED_EXACT.has(lower) || ALLOWED_PREFIXES.some(p => lower.startsWith(p))) {
+        target.setHeader(key, source.headers[key]);
+      } else {
+        dropped.push(key);
+      }
+    }
+
+    if (dropped.length > 0) {
+      Logger.debug(`Response headers dropped by allowlist: ${dropped.join(', ')}`);
+    }
+  }
+
   processRequestBody(body, presetName = null) {
     if (!body) return body;
 
@@ -463,9 +492,7 @@ class ClaudeRequest {
           res.statusCode = retryResponse.statusCode;
           Logger.info(`Token refreshed, retry status: ${retryResponse.statusCode}`);
           Logger.debug('Claude retry response headers:', JSON.stringify(retryResponse.headers, null, 2));
-          Object.keys(retryResponse.headers).forEach(key => {
-            res.setHeader(key, retryResponse.headers[key]);
-          });
+          ClaudeRequest.forwardResponseHeaders(retryResponse, res);
           this.streamResponse(res, retryResponse);
           return;
         } catch (error) {
@@ -480,9 +507,7 @@ class ClaudeRequest {
         Logger.debug(`Claude API status: ${claudeResponse.statusCode}`);
       }
       Logger.debug('Claude response headers:', JSON.stringify(claudeResponse.headers, null, 2));
-      Object.keys(claudeResponse.headers).forEach(key => {
-        res.setHeader(key, claudeResponse.headers[key]);
-      });
+      ClaudeRequest.forwardResponseHeaders(claudeResponse, res);
       
       this.streamResponse(res, claudeResponse);
       
@@ -563,8 +588,6 @@ class ClaudeRequest {
         });
       }
     } else {
-      res.removeHeader('content-encoding');
-
       let responseData = '';
       claudeResponse.on('data', chunk => {
         responseData += chunk;
