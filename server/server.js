@@ -40,6 +40,7 @@ function loadProxyKeys() {
 // PKCE state storage with automatic expiration (10 minutes)
 const pkceStates = new Map();
 const PKCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function cleanupExpiredPKCE() {
   const now = Date.now();
@@ -79,19 +80,38 @@ function loadConfig() {
 
 
 function parseBody(req) {
+  const maxBytes = Number(config.max_body_size) || DEFAULT_MAX_BODY_BYTES;
   return new Promise((resolve, reject) => {
     let body = '';
+    let received = 0;
+    let rejected = false;
     req.on('data', chunk => {
+      if (rejected) return;
+      received += chunk.length;
+      if (received > maxBytes) {
+        rejected = true;
+        req.destroy();
+        const err = new Error(`Request body too large (limit ${maxBytes} bytes)`);
+        err.statusCode = 413;
+        reject(err);
+        return;
+      }
       body += chunk.toString();
     });
     req.on('end', () => {
+      if (rejected) return;
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch (error) {
-        reject(new Error(`Invalid JSON: ${error.message}`));
+        const err = new Error(`Invalid JSON: ${error.message}`);
+        err.statusCode = 400;
+        reject(err);
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (rejected) return;
+      reject(err);
+    });
   });
 }
 
@@ -336,9 +356,12 @@ async function handleRequest(req, res) {
 
       await new ClaudeRequest(auth.passthroughToken).handleResponse(res, body, presetName);
     } catch (error) {
-      Logger.error('Request error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: error.message }));
+      const status = error.statusCode || 500;
+      Logger.error(`Request error (${status}):`, error.message);
+      if (!res.headersSent) {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error.message }));
+      }
     }
     return;
   }
