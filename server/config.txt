@@ -5,3 +5,4 @@ filter_sampling_params=false  # Set to true to ensure only one sampling paramete
 auth_modes=open  # Comma-separated: open (no auth), proxy_keys (validate via keys.json), passthrough (allow direct sk-ant-* keys)
 # max_body_size=10485760  # Request body limit in bytes (default 10 MB)
 # request_timeout=30000   # Max time to receive complete request in ms (default 30s, Slowloris protection)
+# trust_proxy=true         # Trust X-Forwarded-For/X-Real-IP headers (enable only behind a reverse proxy)

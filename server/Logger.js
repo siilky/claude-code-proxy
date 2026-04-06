@@ -1,5 +1,15 @@
 const { Transform } = require('stream');
 
+const SENSITIVE_HEADERS = new Set([
+  'authorization', 'x-api-key', 'cookie', 'set-cookie', 'proxy-authorization'
+]);
+
+function maskValue(value) {
+  const s = String(value);
+  if (s.length <= 12) return '***';
+  return s.slice(0, 4) + '...' + s.slice(-4);
+}
+
 class Logger {
   static init(config) {
     this.config = config;
@@ -36,6 +46,24 @@ class Logger {
 
   static error(...args) {
     console.error('ERROR:', ...args);
+  }
+
+  static headers(label, headers) {
+    if (this.getLogLevel() < 3) return;
+    const safe = {};
+    for (const [key, value] of Object.entries(headers)) {
+      safe[key] = SENSITIVE_HEADERS.has(key.toLowerCase())
+        ? maskValue(value)
+        : value;
+    }
+    this.debug(`${label}:`, JSON.stringify(safe, null, 2));
+  }
+
+  static body(label, body) {
+    if (this.getLogLevel() < 3 || !body || typeof body !== 'object') return;
+    const size = JSON.stringify(body).length;
+    this.debug(`${label} (${size} bytes): model=${body.model}, messages=${body.messages?.length}, stream=${body.stream}`);
+    this.trace(`${label} full:`, JSON.stringify(body, null, 2));
   }
 
   /**

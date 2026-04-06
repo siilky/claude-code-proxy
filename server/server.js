@@ -120,10 +120,12 @@ function parseBody(req) {
 }
 
 function getClientIP(req) {
-  return req.headers['x-forwarded-for'] ||
-         req.headers['x-real-ip'] ||
-         req.connection.remoteAddress ||
-         '127.0.0.1';
+  if (config.trust_proxy) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) return forwarded.split(',')[0].trim();
+    if (req.headers['x-real-ip']) return req.headers['x-real-ip'];
+  }
+  return req.socket.remoteAddress || '127.0.0.1';
 }
 
 function isLocalRequest(req) {
@@ -385,9 +387,21 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
         Logger.info(`Client: ${auth.clientName}`);
       }
 
-      Logger.debug('Incoming request headers:', JSON.stringify(req.headers, null, 2));
+      Logger.headers('Incoming request headers', req.headers);
       const body = await parseBody(req);
-      Logger.debug(`Claude request body (${JSON.stringify(body).length} bytes):`, JSON.stringify(body, null, 2));
+
+      if (!body.model || typeof body.model !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing or invalid "model" field' }));
+        return;
+      }
+      if (!Array.isArray(body.messages) || body.messages.length === 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing or invalid "messages" field' }));
+        return;
+      }
+
+      Logger.body('Incoming request body', body);
 
       let presetName = null;
       const presetMatch = pathname.match(/^\/v1\/(\w+)\/messages$/);

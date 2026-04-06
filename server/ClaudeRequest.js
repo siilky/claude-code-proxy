@@ -443,8 +443,8 @@ class ClaudeRequest {
     const headers = this.getHeaders(token);
     const processedBody = this.processRequestBody(body, presetName);
 
-    Logger.debug('Outgoing headers to Claude:', JSON.stringify(headers, null, 2));
-    Logger.debug(`Final request to Claude (${JSON.stringify(processedBody).length} bytes):`, JSON.stringify(processedBody, null, 2));
+    Logger.headers('Outgoing headers to Claude', headers);
+    Logger.body('Final request to Claude', processedBody);
 
     const urlParts = new URL(this.API_URL);
     const options = {
@@ -491,7 +491,7 @@ class ClaudeRequest {
           const retryResponse = await this.makeRequest(body, presetName);
           res.statusCode = retryResponse.statusCode;
           Logger.info(`Token refreshed, retry status: ${retryResponse.statusCode}`);
-          Logger.debug('Claude retry response headers:', JSON.stringify(retryResponse.headers, null, 2));
+          Logger.headers('Claude retry response headers', retryResponse.headers);
           ClaudeRequest.forwardResponseHeaders(retryResponse, res);
           this.streamResponse(res, retryResponse);
           return;
@@ -506,7 +506,7 @@ class ClaudeRequest {
       } else {
         Logger.debug(`Claude API status: ${claudeResponse.statusCode}`);
       }
-      Logger.debug('Claude response headers:', JSON.stringify(claudeResponse.headers, null, 2));
+      Logger.headers('Claude response headers', claudeResponse.headers);
       ClaudeRequest.forwardResponseHeaders(claudeResponse, res);
       
       this.streamResponse(res, claudeResponse);
@@ -544,7 +544,7 @@ class ClaudeRequest {
 
     const contentType = claudeResponse.headers['content-type'] || '';
     if (contentType.includes('text/event-stream')) {
-      Logger.debug('Outgoing response headers to client:', JSON.stringify(res.getHeaders(), null, 2));
+      Logger.headers('Outgoing response headers to client', res.getHeaders());
       
       claudeResponse.on('error', (err) => {
         Logger.error(`Claude SSE stream error: ${err.message}`);
@@ -608,7 +608,7 @@ class ClaudeRequest {
         try {
           const jsonData = JSON.parse(responseData);
           res.setHeader('Content-Type', 'application/json');
-          Logger.debug('Outgoing response headers to client:', JSON.stringify(res.getHeaders(), null, 2));
+          Logger.headers('Outgoing response headers to client', res.getHeaders());
           res.end(JSON.stringify(jsonData));
           Logger.debug('Non-streaming response sent back to client');
         } catch (e) {

@@ -13,6 +13,9 @@ Key=value format. Lines starting with `#` are comments. Inline comments supporte
 | `auth_modes` | `open` | Comma-separated client auth modes: `open`, `proxy_keys`, `passthrough` |
 | `fallback_to_claude_code` | `true` | Fall back to `~/.claude/.credentials.json` if OAuth tokens unavailable |
 | `auto_open_browser` | `true` | Auto-open browser for OAuth login on startup (native only) |
+| `max_body_size` | `10485760` | Request body limit in bytes (10 MB) |
+| `request_timeout` | `30000` | Max time to receive complete request in ms (Slowloris protection) |
+| `trust_proxy` | `false` | Trust `X-Forwarded-For`/`X-Real-IP` headers. Enable only behind a reverse proxy |
 
 ## Example configurations
 
