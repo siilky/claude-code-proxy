@@ -85,7 +85,7 @@ class OAuthManager {
       Logger.info('Successfully exchanged authorization code for tokens');
       return response;
     } catch (error) {
-      Logger.error('Failed to exchange code for tokens', error);
+      Logger.error(`Failed to exchange code for tokens: ${error.message}`);
       throw error;
     }
   }
@@ -144,6 +144,7 @@ class OAuthManager {
   _makeTokenRequest(payload) {
     return new Promise((resolve, reject) => {
       const url = new URL(OAUTH_CONFIG.token_url);
+      Logger.debug(`Token request to ${url.hostname}${url.pathname}`);
 
       const options = {
         hostname: url.hostname,
@@ -171,12 +172,20 @@ class OAuthManager {
               reject(new Error(`Failed to parse token response: ${error.message}`));
             }
           } else {
+            Logger.warn(`Token endpoint returned ${res.statusCode}`);
             reject(new Error(`Token request failed with status ${res.statusCode}: ${data}`));
           }
         });
       });
 
+      req.setTimeout(15000, () => {
+        Logger.error('OAuth token request timed out (15s)');
+        req.destroy();
+        reject(new Error('OAuth token request timeout'));
+      });
+
       req.on('error', (error) => {
+        Logger.error(`OAuth token request network error: ${error.message}`);
         reject(error);
       });
 
@@ -198,7 +207,7 @@ class OAuthManager {
       const data = fs.readFileSync(this.tokenPath, 'utf8');
       return JSON.parse(data);
     } catch (error) {
-      Logger.error('Failed to load tokens from file', error);
+      Logger.error(`Failed to load tokens from file: ${error.message}`);
       return null;
     }
   }
@@ -224,7 +233,7 @@ class OAuthManager {
 
       Logger.info('Tokens saved successfully');
     } catch (error) {
-      Logger.error('Failed to save tokens to file', error);
+      Logger.error(`Failed to save tokens to file: ${error.message}`);
       throw error;
     }
   }
@@ -237,9 +246,11 @@ class OAuthManager {
     // Use cached token if available
     if (this.cachedToken) {
       const tokens = this.loadTokens();
-      if (tokens && tokens.expires_at > Date.now() + 60000) { // 1 minute buffer
+      if (tokens && tokens.expires_at > Date.now() + 60000) {
+        Logger.debug('Using cached OAuth access token');
         return this.cachedToken;
       }
+      Logger.debug('Cached token expired or expiring soon');
     }
 
     const tokens = this.loadTokens();
@@ -249,7 +260,8 @@ class OAuthManager {
 
     // Check if token is expired or expiring soon (1 minute buffer)
     if (tokens.expires_at <= Date.now() + 60000) {
-      Logger.info('Access token expired or expiring soon, refreshing...');
+      const expiresIn = Math.round((tokens.expires_at - Date.now()) / 1000);
+      Logger.info(`Access token expires in ${expiresIn}s, refreshing...`);
       await this.refreshAccessToken();
       const newTokens = this.loadTokens();
       this.cachedToken = newTokens.access_token;
@@ -292,7 +304,7 @@ class OAuthManager {
       }
       this.cachedToken = null;
     } catch (error) {
-      Logger.error('Failed to delete tokens', error);
+      Logger.error(`Failed to delete tokens: ${error.message}`);
       throw error;
     }
   }

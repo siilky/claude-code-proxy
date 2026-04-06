@@ -189,16 +189,16 @@ class ClaudeRequest {
 
   loadCredentialsFromFile() {
     if (process.platform === 'win32') {
-      // Try native Windows location first
       const nativePath = path.join(os.homedir(), '.claude', '.credentials.json');
       if (fs.existsSync(nativePath)) {
+        Logger.debug(`Loading credentials from ${nativePath}`);
         return fs.readFileSync(nativePath, 'utf8');
       }
-      // Fallback to WSL for users who still have the old setup
+      Logger.debug('Native credentials not found, falling back to WSL');
       return execSync('wsl cat ~/.claude/.credentials.json', { encoding: 'utf8', timeout: 10000 });
     } else {
-      // macOS/Linux use the same path convention
       const credentialsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+      Logger.debug(`Loading credentials from ${credentialsPath}`);
       return fs.readFileSync(credentialsPath, 'utf8');
     }
   }
@@ -235,6 +235,7 @@ class ClaudeRequest {
   }
 
   async _doRefresh() {
+    Logger.info('Refreshing Claude Code OAuth token...');
     try {
       const credentialsData = this.loadCredentialsFromFile();
       const credentials = JSON.parse(credentialsData);
@@ -431,10 +432,17 @@ class ClaudeRequest {
       });
 
       req.on('error', (err) => {
+        Logger.error(`Network error connecting to Claude API: ${err.message}`);
         req.destroy();
         reject(err);
       });
-      
+
+      req.setTimeout(120000, () => {
+        Logger.error('Claude API request timed out (120s)');
+        req.destroy();
+        reject(new Error('Claude API request timeout'));
+      });
+
       req.write(JSON.stringify(processedBody));
       req.end();
     });
@@ -453,7 +461,7 @@ class ClaudeRequest {
           ClaudeRequest.cachedToken = newToken;
           const retryResponse = await this.makeRequest(body, presetName);
           res.statusCode = retryResponse.statusCode;
-          Logger.debug(`Claude API retry status: ${retryResponse.statusCode}`);
+          Logger.info(`Token refreshed, retry status: ${retryResponse.statusCode}`);
           Logger.debug('Claude retry response headers:', JSON.stringify(retryResponse.headers, null, 2));
           Object.keys(retryResponse.headers).forEach(key => {
             res.setHeader(key, retryResponse.headers[key]);
@@ -461,12 +469,16 @@ class ClaudeRequest {
           this.streamResponse(res, retryResponse);
           return;
         } catch (error) {
-          Logger.info('Token load/refresh failed, passing 401 to client');
+          Logger.warn(`Token refresh failed, passing 401 to client: ${error.message}`);
         }
       }
       
       res.statusCode = claudeResponse.statusCode;
-      Logger.debug(`Claude API status: ${claudeResponse.statusCode}`);
+      if (claudeResponse.statusCode >= 400) {
+        Logger.warn(`Claude API returned ${claudeResponse.statusCode}`);
+      } else {
+        Logger.debug(`Claude API status: ${claudeResponse.statusCode}`);
+      }
       Logger.debug('Claude response headers:', JSON.stringify(claudeResponse.headers, null, 2));
       Object.keys(claudeResponse.headers).forEach(key => {
         res.setHeader(key, claudeResponse.headers[key]);
@@ -500,6 +512,7 @@ class ClaudeRequest {
           }
         }
       } catch (e) {
+        Logger.trace('SSE chunk parse error:', e.message);
       }
       return null;
     };
@@ -509,9 +522,9 @@ class ClaudeRequest {
       Logger.debug('Outgoing response headers to client:', JSON.stringify(res.getHeaders(), null, 2));
       
       claudeResponse.on('error', (err) => {
-        Logger.debug('Claude response stream error:', err);
+        Logger.error(`Claude SSE stream error: ${err.message}`);
         if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.writeHead(502, { 'Content-Type': 'application/json' });
         }
         if (!res.destroyed) {
           res.end(JSON.stringify({ error: 'Upstream response error' }));
@@ -529,7 +542,7 @@ class ClaudeRequest {
         const debugStream = Logger.createDebugStream('Claude SSE', extractClaudeText);
         
         debugStream.on('error', (err) => {
-          Logger.debug('Debug stream error:', err);
+          Logger.error(`Debug stream processing error: ${err.message}`);
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
           }
@@ -576,8 +589,8 @@ class ClaudeRequest {
           res.end(JSON.stringify(jsonData));
           Logger.debug('Non-streaming response sent back to client');
         } catch (e) {
+          Logger.warn(`Non-JSON response from Claude (${claudeResponse.statusCode}), forwarding raw`);
           res.end(responseData);
-          Logger.debug('Raw response sent back to client');
         }
       });
     }

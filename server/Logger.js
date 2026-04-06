@@ -23,15 +23,32 @@ class Logger {
   }
 
   static info(...args) {
-    console.log('INFO:', ...args);
+    if (this.getLogLevel() >= 2) {
+      console.log('INFO:', ...args);
+    }
   }
 
   static warn(...args) {
-    console.warn('WARN:', ...args);
+    if (this.getLogLevel() >= 1) {
+      console.warn('WARN:', ...args);
+    }
   }
 
   static error(...args) {
     console.error('ERROR:', ...args);
+  }
+
+  /**
+   * Log an error with consistent formatting:
+   * - At the given level: message + error.message
+   * - At DEBUG: full stack trace (if available)
+   */
+  static logError(level, message, error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    this[level](`${message}: ${errorMsg}`);
+    if (error instanceof Error && error.stack && this.getLogLevel() >= 3) {
+      this.debug('Stack trace:', error.stack);
+    }
   }
 
   static createDebugStream(label = 'Stream chunk', textExtractor = null) {
@@ -85,7 +102,7 @@ class Logger {
             }
           }
         } catch (error) {
-          Logger.debug(`${label} (failed to decode):`, chunk);
+          Logger.warn(`${label}: failed to decode stream chunk (${chunk.length} bytes): ${error.message}`);
         }
         callback(null, chunk);
       }

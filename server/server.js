@@ -131,6 +131,7 @@ function serveStaticFile(res, filePath, contentType) {
   const staticPath = path.join(__dirname, 'static', filePath);
   fs.readFile(staticPath, 'utf8', (err, data) => {
     if (err) {
+      Logger.warn(`Static file not found: ${filePath}`);
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;
@@ -163,21 +164,31 @@ function authenticateClient(req) {
 
   // Passthrough: direct Anthropic API key
   if (apiKey && apiKey.includes('sk-ant')) {
-    if (!authModes.has('passthrough')) return null;
+    if (!authModes.has('passthrough')) {
+      Logger.warn('Passthrough auth attempted but mode not enabled');
+      return null;
+    }
     return { passthroughToken: apiKey, clientName: 'passthrough' };
   }
 
   // Proxy key
   if (apiKey) {
-    if (!authModes.has('proxy_keys')) return null;
+    if (!authModes.has('proxy_keys')) {
+      Logger.warn('Proxy key auth attempted but mode not enabled');
+      return null;
+    }
     loadProxyKeys();
     const keyName = proxyKeys[apiKey];
-    if (!keyName) return null;
+    if (!keyName) {
+      Logger.warn('Rejected unknown proxy key');
+      return null;
+    }
     return { passthroughToken: null, clientName: keyName };
   }
 
   // No key
   if (authModes.has('open')) return { passthroughToken: null, clientName: null };
+  Logger.warn('No API key provided and open mode not enabled');
   return null;
 }
 
@@ -201,9 +212,25 @@ async function handleRequest(req, res) {
 
   Logger.info(`${req.method} ${pathname} from ${clientIP}`);
 
+  try {
+    return await _handleRequest(req, res, clientIP, parsedUrl, pathname);
+  } catch (error) {
+    Logger.error(`Unhandled error in ${req.method} ${pathname}:`, error.message);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+    }
+    if (!res.writableEnded) {
+      res.end(JSON.stringify({ error: 'Internal server error' }));
+    }
+  }
+}
+
+async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
+
   // Auth routes — localhost only
   if (pathname.startsWith('/auth/')) {
     if (!isLocalRequest(req)) {
+      Logger.warn(`Auth endpoint ${pathname} accessed from non-local IP ${clientIP}, rejected`);
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
       return;
@@ -335,6 +362,7 @@ async function handleRequest(req, res) {
     try {
       const auth = authenticateClient(req);
       if (!auth) {
+        Logger.warn(`Auth rejected for ${req.method} ${pathname} from ${clientIP}`);
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid proxy API key' }));
         return;
@@ -365,8 +393,8 @@ async function handleRequest(req, res) {
     }
     return;
   }
-  
-  
+
+  Logger.debug(`404 Not Found: ${req.method} ${pathname}`);
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 }
@@ -393,6 +421,17 @@ function startServer() {
 
   // Smart host binding: auto-detect Docker or use config
   const host = config.host || (isRunningInDocker() ? '0.0.0.0' : '127.0.0.1');
+
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      Logger.error(`Port ${port} is already in use`);
+    } else if (error.code === 'EACCES') {
+      Logger.error(`Permission denied to bind to ${host}:${port}`);
+    } else {
+      Logger.error(`Server error: ${error.message}`);
+    }
+    process.exit(1);
+  });
 
   server.listen(port, host, () => {
     Logger.info(`claude-code-proxy server listening on ${host}:${port}`);
@@ -428,6 +467,20 @@ function startServer() {
   process.on('SIGINT', () => {
     Logger.info('Shutting down...');
     server.close(() => process.exit(0));
+  });
+
+  process.on('uncaughtException', (error) => {
+    Logger.error('Uncaught exception:', error.message);
+    Logger.debug('Stack:', error.stack);
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    Logger.error('Unhandled promise rejection:', message);
+    if (reason instanceof Error) {
+      Logger.debug('Stack:', reason.stack);
+    }
   });
 }
 
