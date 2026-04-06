@@ -42,6 +42,9 @@ const pkceStates = new Map();
 const PKCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_PKCE_STATES = 10;
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
+const DEFAULT_REQUEST_TIMEOUT = 30_000; // 30s to receive complete request
+const HEADERS_TIMEOUT = 10_000;         // 10s to receive headers
+const IDLE_SOCKET_TIMEOUT = 300_000;    // 5min inactivity kills socket
 
 function cleanupExpiredPKCE() {
   const now = Date.now();
@@ -428,6 +431,11 @@ function startServer() {
   loadProxyKeys();
 
   const server = http.createServer(handleRequest);
+  const requestTimeout = Number(config.request_timeout) || DEFAULT_REQUEST_TIMEOUT;
+  server.requestTimeout = requestTimeout;
+  server.headersTimeout = Math.min(HEADERS_TIMEOUT, requestTimeout);
+  server.timeout = IDLE_SOCKET_TIMEOUT;
+
   const port = parseInt(config.port) || 3000;
 
   // Smart host binding: auto-detect Docker or use config
@@ -446,6 +454,7 @@ function startServer() {
 
   server.listen(port, host, () => {
     Logger.info(`claude-code-proxy server listening on ${host}:${port}`);
+    Logger.info(`Timeouts: request=${requestTimeout}ms, headers=${server.headersTimeout}ms, idle=${IDLE_SOCKET_TIMEOUT}ms`);
 
     // Display authentication status
     const isAuthenticated = OAuthManager.isAuthenticated();

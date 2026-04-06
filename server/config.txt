@@ -3,3 +3,5 @@ host=0.0.0.0
 log_level=INFO  # TRACE, DEBUG, INFO, WARN, ERROR
 filter_sampling_params=false  # Set to true to ensure only one sampling parameter is sent (required for Sonnet 4.5 compatibility). Removes default values (1.0) and prefers temperature over top_p when both are non-default.
 auth_modes=open  # Comma-separated: open (no auth), proxy_keys (validate via keys.json), passthrough (allow direct sk-ant-* keys)
+# max_body_size=10485760  # Request body limit in bytes (default 10 MB)
+# request_timeout=30000   # Max time to receive complete request in ms (default 30s, Slowloris protection)
