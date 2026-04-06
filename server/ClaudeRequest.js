@@ -41,7 +41,6 @@ const FILTER_SAMPLING_PARAMS = CONFIG.filter_sampling_params === true; // Defaul
 const FALLBACK_TO_CLAUDE_CODE = CONFIG.fallback_to_claude_code !== false; // Default to true
 
 class ClaudeRequest {
-  static cachedToken = null;
   static presetCache = new Map();
   static refreshPromise = null;
 
@@ -141,33 +140,44 @@ class ClaudeRequest {
         : `Bearer ${this.passthroughToken}`;
     }
 
-    if (ClaudeRequest.cachedToken) {
-      return ClaudeRequest.cachedToken;
-    }
-    const token = await this.loadOrRefreshToken();
-    ClaudeRequest.cachedToken = token;
-    return token;
+    return await this.loadOrRefreshToken();
   }
 
   async loadOrRefreshToken() {
-    try {
-      // Try OAuthManager's stored tokens first
-      if (OAuthManager.isAuthenticated()) {
+    if (OAuthManager.isAuthenticated()) {
+      try {
         Logger.debug('Using OAuthManager tokens');
         const token = await OAuthManager.getValidAccessToken();
         return `Bearer ${token}`;
+      } catch (error) {
+        if (error.code === 'INVALID_GRANT' && FALLBACK_TO_CLAUDE_CODE) {
+          Logger.info('OAuth tokens invalidated, trying Claude Code credentials fallback');
+          try {
+            const token = await this.loadFromClaudeCodeCredentials();
+            Logger.info('Successfully fell back to Claude Code credentials');
+            return token;
+          } catch (fallbackError) {
+            Logger.warn(`Claude Code fallback also failed: ${fallbackError.message}`);
+          }
+        }
+        const wrapped = new Error(`Failed to get auth token: ${error.message}`);
+        wrapped.code = error.code;
+        throw wrapped;
       }
+    }
 
-      // Fallback to Claude Code credentials if enabled
-      if (FALLBACK_TO_CLAUDE_CODE) {
+    if (FALLBACK_TO_CLAUDE_CODE) {
+      try {
         Logger.debug('Falling back to Claude Code credentials');
         return await this.loadFromClaudeCodeCredentials();
+      } catch (error) {
+        const wrapped = new Error(`Failed to get auth token: ${error.message}`);
+        wrapped.code = error.code;
+        throw wrapped;
       }
-
-      throw new Error('No authentication tokens found. Please authenticate first.');
-    } catch (error) {
-      throw new Error(`Failed to get auth token: ${error.message}`);
     }
+
+    throw new Error('Failed to get auth token: No authentication tokens found. Please authenticate first.');
   }
 
   async loadFromClaudeCodeCredentials() {
@@ -183,7 +193,9 @@ class ClaudeRequest {
 
       return `Bearer ${oauth.accessToken}`;
     } catch (error) {
-      throw new Error(`Failed to load Claude Code credentials: ${error.message}`);
+      const wrapped = new Error(`Failed to load Claude Code credentials: ${error.message}`);
+      wrapped.code = error.code;
+      throw wrapped;
     }
   }
 
@@ -306,7 +318,9 @@ class ClaudeRequest {
         throw new Error(errorMsg);
       }
       if (error.message.includes('invalid_grant')) {
-        throw new Error('Refresh token expired. Please log in again through Claude Code');
+        const err = new Error('Refresh token expired. Please log in again through Claude Code');
+        err.code = 'INVALID_GRANT';
+        throw err;
       }
       if (error.message.includes('timeout')) {
         throw new Error('Token refresh timeout. Please check your internet connection');
@@ -328,6 +342,19 @@ class ClaudeRequest {
     }
 
     return headers;
+  }
+
+  static proxyMessage(text) {
+    return {
+      id: 'msg_proxy',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: `[Proxy] ${text}` }],
+      model: 'proxy',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 }
+    };
   }
 
   static forwardResponseHeaders(source, target) {
@@ -482,12 +509,11 @@ class ClaudeRequest {
       const claudeResponse = await this.makeRequest(body, presetName);
       
       if (claudeResponse.statusCode === 401 && !this.passthroughToken) {
-        Logger.info('Got 401, checking credential store');
-        ClaudeRequest.cachedToken = null;
+        Logger.info('Got 401, refreshing token');
+        OAuthManager.cachedToken = null;
 
         try {
-          const newToken = await this.loadOrRefreshToken();
-          ClaudeRequest.cachedToken = newToken;
+          await this.loadOrRefreshToken();
           const retryResponse = await this.makeRequest(body, presetName);
           res.statusCode = retryResponse.statusCode;
           Logger.info(`Token refreshed, retry status: ${retryResponse.statusCode}`);
@@ -496,6 +522,12 @@ class ClaudeRequest {
           this.streamResponse(res, retryResponse);
           return;
         } catch (error) {
+          if (error.code === 'INVALID_GRANT') {
+            Logger.warn('Returning re-authorization message to client (401 retry path)');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(ClaudeRequest.proxyMessage('OAuth session expired. Please re-authorize.')));
+            return;
+          }
           Logger.warn(`Token refresh failed, passing 401 to client: ${error.message}`);
         }
       }
@@ -512,6 +544,12 @@ class ClaudeRequest {
       this.streamResponse(res, claudeResponse);
       
     } catch (error) {
+      if (error.code === 'INVALID_GRANT') {
+        Logger.warn('Returning re-authorization message to client');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(ClaudeRequest.proxyMessage('OAuth session expired. Please re-authorize.')));
+        return;
+      }
       const status = error.statusCode || 500;
       Logger.error(`Claude request error (${status}):`, error.message);
       res.writeHead(status, { 'Content-Type': 'application/json' });

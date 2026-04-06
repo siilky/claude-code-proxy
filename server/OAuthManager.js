@@ -127,6 +127,16 @@ class OAuthManager {
         this.cachedToken = newTokens.access_token;
 
         return response;
+      } catch (error) {
+        if (error.message.includes('invalid_grant')) {
+          Logger.warn('Refresh token invalid or revoked, clearing stored tokens');
+          this.cachedToken = null;
+          try { fs.unlinkSync(this.tokenPath); } catch (e) {}
+          const err = new Error('OAuth refresh token expired or revoked. Please re-authorize.');
+          err.code = 'INVALID_GRANT';
+          throw err;
+        }
+        throw error;
       } finally {
         this.refreshPromise = null;
       }
