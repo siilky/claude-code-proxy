@@ -45,18 +45,11 @@ class ClaudeRequest {
   static presetCache = new Map();
   static refreshPromise = null;
 
-  constructor(req = null) {
+  constructor(passthroughToken = null) {
     this.API_URL = 'https://api.anthropic.com/v1/messages';
     this.VERSION = '2023-06-01';
-    this.BETA_HEADER = 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14';
-
-    const apiKey = req?.headers?.['x-api-key'];
-    if (apiKey && apiKey.includes('sk-ant')) {
-      Logger.debug('Using x-api-key as token, replacing cache');
-      const token = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
-      ClaudeRequest.cachedToken = token;
-    }
-
+    this.BETA_HEADER = 'claude-code-20250219,files-api-2025-04-14,oauth-2025-04-20,interleaved-thinking-2025-05-14';
+    this.passthroughToken = passthroughToken;
     this.refreshToken = TOKEN_REFRESH_METHOD === 'OAUTH' ? this.refreshTokenWithOauth : this.refreshTokenWithClaudeCodeCli;
   }
 
@@ -141,10 +134,16 @@ class ClaudeRequest {
   }
 
   async getAuthToken() {
+    if (this.passthroughToken) {
+      Logger.debug('Passthrough mode: using client API key');
+      return this.passthroughToken.startsWith('Bearer ')
+        ? this.passthroughToken
+        : `Bearer ${this.passthroughToken}`;
+    }
+
     if (ClaudeRequest.cachedToken) {
       return ClaudeRequest.cachedToken;
     }
-
     const token = await this.loadOrRefreshToken();
     ClaudeRequest.cachedToken = token;
     return token;
@@ -445,10 +444,10 @@ class ClaudeRequest {
     try {
       const claudeResponse = await this.makeRequest(body, presetName);
       
-      if (claudeResponse.statusCode === 401) {
+      if (claudeResponse.statusCode === 401 && !this.passthroughToken) {
         Logger.info('Got 401, checking credential store');
         ClaudeRequest.cachedToken = null;
-        
+
         try {
           const newToken = await this.loadOrRefreshToken();
           ClaudeRequest.cachedToken = newToken;
@@ -476,8 +475,9 @@ class ClaudeRequest {
       this.streamResponse(res, claudeResponse);
       
     } catch (error) {
-      console.error('Claude request error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      const status = error.statusCode || 500;
+      Logger.error(`Claude request error (${status}):`, error.message);
+      res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
     }
   }

@@ -8,6 +8,34 @@ const OAuthManager = require('./OAuthManager');
 const { exec } = require('child_process');
 
 let config = {};
+let authModes = new Set(['open']); // default
+
+// Proxy API keys: { "key-string": "FriendName", ... }
+const KEYS_PATH = path.join(
+  process.env.HOME || process.env.USERPROFILE,
+  '.claude-code-proxy',
+  'keys.json'
+);
+let proxyKeys = {};
+let keysFileMtime = 0;
+
+function loadProxyKeys() {
+  if (!authModes.has('proxy_keys')) return;
+  try {
+    const stat = fs.statSync(KEYS_PATH);
+    if (stat.mtimeMs === keysFileMtime) return;
+    keysFileMtime = stat.mtimeMs;
+    const data = fs.readFileSync(KEYS_PATH, 'utf8');
+    proxyKeys = JSON.parse(data);
+    Logger.info(`Loaded ${Object.keys(proxyKeys).length} proxy key(s) from keys.json`);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      Logger.warn(`auth_modes includes proxy_keys but ${KEYS_PATH} not found`);
+    } else {
+      Logger.warn(`Failed to load proxy keys: ${error.message}`);
+    }
+  }
+}
 
 // PKCE state storage with automatic expiration (10 minutes)
 const pkceStates = new Map();
@@ -103,6 +131,29 @@ function openBrowser(url) {
       Logger.debug(`Failed to open browser: ${error.message}`);
     }
   });
+}
+
+function authenticateClient(req) {
+  const apiKey = req.headers['x-api-key'];
+
+  // Passthrough: direct Anthropic API key
+  if (apiKey && apiKey.includes('sk-ant')) {
+    if (!authModes.has('passthrough')) return null;
+    return { passthroughToken: apiKey, clientName: 'passthrough' };
+  }
+
+  // Proxy key
+  if (apiKey) {
+    if (!authModes.has('proxy_keys')) return null;
+    loadProxyKeys();
+    const keyName = proxyKeys[apiKey];
+    if (!keyName) return null;
+    return { passthroughToken: null, clientName: keyName };
+  }
+
+  // No key
+  if (authModes.has('open')) return { passthroughToken: null, clientName: null };
+  return null;
 }
 
 function isRunningInDocker() {
@@ -258,18 +309,28 @@ async function handleRequest(req, res) {
   
   if (req.method === 'POST' && (pathname === '/v1/messages' || pathname.match(/^\/v1\/\w+\/messages$/))) {
     try {
+      const auth = authenticateClient(req);
+      if (!auth) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid proxy API key' }));
+        return;
+      }
+      if (auth.clientName) {
+        Logger.info(`Client: ${auth.clientName}`);
+      }
+
       Logger.debug('Incoming request headers:', JSON.stringify(req.headers, null, 2));
       const body = await parseBody(req);
       Logger.debug(`Claude request body (${JSON.stringify(body).length} bytes):`, JSON.stringify(body, null, 2));
-      
+
       let presetName = null;
       const presetMatch = pathname.match(/^\/v1\/(\w+)\/messages$/);
       if (presetMatch) {
         presetName = presetMatch[1];
         Logger.debug(`Detected preset: ${presetName}`);
       }
-      
-      await new ClaudeRequest(req).handleResponse(res, body, presetName);
+
+      await new ClaudeRequest(auth.passthroughToken).handleResponse(res, body, presetName);
     } catch (error) {
       Logger.error('Request error:', error.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -285,6 +346,20 @@ async function handleRequest(req, res) {
 
 function startServer() {
   loadConfig();
+
+  if (config.auth_modes) {
+    authModes = new Set(config.auth_modes.split(',').map(s => s.trim()));
+    const valid = ['open', 'proxy_keys', 'passthrough'];
+    for (const mode of authModes) {
+      if (!valid.includes(mode)) {
+        Logger.error(`Unknown auth_mode: ${mode}. Valid: ${valid.join(', ')}`);
+        process.exit(1);
+      }
+    }
+  }
+  Logger.info(`Auth modes: ${[...authModes].join(', ')}`);
+
+  loadProxyKeys();
 
   const server = http.createServer(handleRequest);
   const port = parseInt(config.port) || 3000;
