@@ -1,35 +1,34 @@
-const http = require('http');
-const url = require('url');
-const fs = require('fs');
-const path = require('path');
-const ClaudeRequest = require('./ClaudeRequest');
-const Logger = require('./Logger');
-const OAuthManager = require('./OAuthManager');
-const { exec } = require('child_process');
+const http = require("http");
+const url = require("url");
+const fs = require("fs");
+const path = require("path");
+const ClaudeRequest = require("./ClaudeRequest");
+const Logger = require("./Logger");
+const OAuthManager = require("./OAuthManager");
+const { exec } = require("child_process");
 
 let config = {};
-let authModes = new Set(['open']); // default
+let authModes = new Set(["open"]); // default
 
 // Proxy API keys: { "key-string": "FriendName", ... }
-const KEYS_PATH = path.join(
-  process.env.HOME || process.env.USERPROFILE,
-  '.claude-code-proxy',
-  'keys.json'
-);
+const KEYS_PATH = path.join(process.cwd(), "keys.json");
 let proxyKeys = {};
 let keysFileMtime = 0;
 
 function loadProxyKeys() {
-  if (!authModes.has('proxy_keys')) return;
+  if (!authModes.has("proxy_keys")) return;
+
   try {
     const stat = fs.statSync(KEYS_PATH);
     if (stat.mtimeMs === keysFileMtime) return;
     keysFileMtime = stat.mtimeMs;
-    const data = fs.readFileSync(KEYS_PATH, 'utf8');
+    const data = fs.readFileSync(KEYS_PATH, "utf8");
     proxyKeys = JSON.parse(data);
-    Logger.info(`Loaded ${Object.keys(proxyKeys).length} proxy key(s) from keys.json`);
+    Logger.info(
+      `Loaded ${Object.keys(proxyKeys).length} proxy key(s) from keys.json`,
+    );
   } catch (error) {
-    if (error.code === 'ENOENT') {
+    if (error.code === "ENOENT") {
       Logger.warn(`auth_modes includes proxy_keys but ${KEYS_PATH} not found`);
     } else {
       Logger.warn(`Failed to load proxy keys: ${error.message}`);
@@ -43,8 +42,8 @@ const PKCE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_PKCE_STATES = 10;
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_REQUEST_TIMEOUT = 30_000; // 30s to receive complete request
-const HEADERS_TIMEOUT = 10_000;         // 10s to receive headers
-const IDLE_SOCKET_TIMEOUT = 300_000;    // 5min inactivity kills socket
+const HEADERS_TIMEOUT = 10_000; // 10s to receive headers
+const IDLE_SOCKET_TIMEOUT = 300_000; // 5min inactivity kills socket
 
 function cleanupExpiredPKCE() {
   const now = Date.now();
@@ -60,49 +59,51 @@ setInterval(cleanupExpiredPKCE, 60000);
 
 function loadConfig() {
   try {
-    const configPath = path.join(__dirname, 'config.txt');
-    const configFile = fs.readFileSync(configPath, 'utf8');
-    
-    configFile.split('\n').forEach(line => {
+    const configPath = path.join(__dirname, "config.txt");
+    const configFile = fs.readFileSync(configPath, "utf8");
+
+    configFile.split("\n").forEach((line) => {
       const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...valueParts] = trimmed.split('=');
-        const value = valueParts.join('=').trim();
-        const commentIndex = value.indexOf('#');
-        config[key.trim()] = commentIndex >= 0 ? value.substring(0, commentIndex).trim() : value;
+      if (trimmed && !trimmed.startsWith("#")) {
+        const [key, ...valueParts] = trimmed.split("=");
+        const value = valueParts.join("=").trim();
+        const commentIndex = value.indexOf("#");
+        config[key.trim()] =
+          commentIndex >= 0 ? value.substring(0, commentIndex).trim() : value;
       }
     });
-    
+
     Logger.init(config);
-    
-    Logger.info('Config loaded from config.txt');
+
+    Logger.info("Config loaded from config.txt");
   } catch (error) {
-    Logger.error('Failed to load config:', error.message);
+    Logger.error("Failed to load config:", error.message);
     process.exit(1);
   }
 }
 
-
 function parseBody(req) {
   const maxBytes = Number(config.max_body_size) || DEFAULT_MAX_BODY_BYTES;
   return new Promise((resolve, reject) => {
-    let body = '';
+    let body = "";
     let received = 0;
     let rejected = false;
-    req.on('data', chunk => {
+    req.on("data", (chunk) => {
       if (rejected) return;
       received += chunk.length;
       if (received > maxBytes) {
         rejected = true;
         req.destroy();
-        const err = new Error(`Request body too large (limit ${maxBytes} bytes)`);
+        const err = new Error(
+          `Request body too large (limit ${maxBytes} bytes)`,
+        );
         err.statusCode = 413;
         reject(err);
         return;
       }
       body += chunk.toString();
     });
-    req.on('end', () => {
+    req.on("end", () => {
       if (rejected) return;
       try {
         resolve(body ? JSON.parse(body) : {});
@@ -112,7 +113,7 @@ function parseBody(req) {
         reject(err);
       }
     });
-    req.on('error', (err) => {
+    req.on("error", (err) => {
       if (rejected) return;
       reject(err);
     });
@@ -121,34 +122,35 @@ function parseBody(req) {
 
 function getClientIP(req) {
   if (config.trust_proxy) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) return forwarded.split(',')[0].trim();
-    if (req.headers['x-real-ip']) return req.headers['x-real-ip'];
+    const forwarded = req.headers["x-forwarded-for"];
+    if (forwarded) return forwarded.split(",")[0].trim();
+    if (req.headers["x-real-ip"]) return req.headers["x-real-ip"];
   }
-  return req.socket.remoteAddress || '127.0.0.1';
+  return req.socket.remoteAddress || "127.0.0.1";
 }
 
 function isLocalRequest(req) {
   const addr = req.socket.remoteAddress;
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
 const STATIC_SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'",
-  'X-Content-Type-Options': 'nosniff'
+  "Content-Security-Policy":
+    "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'",
+  "X-Content-Type-Options": "nosniff",
 };
 
 function serveStaticFile(res, filePath, contentType) {
-  const staticPath = path.join(__dirname, 'static', filePath);
-  fs.readFile(staticPath, 'utf8', (err, data) => {
+  const staticPath = path.join(__dirname, "static", filePath);
+  fs.readFile(staticPath, "utf8", (err, data) => {
     if (err) {
       Logger.warn(`Static file not found: ${filePath}`);
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Not found');
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
       return;
     }
-    const headers = { 'Content-Type': contentType };
-    if (contentType === 'text/html') {
+    const headers = { "Content-Type": contentType };
+    if (contentType === "text/html") {
       Object.assign(headers, STATIC_SECURITY_HEADERS);
     }
     res.writeHead(200, headers);
@@ -158,9 +160,9 @@ function serveStaticFile(res, filePath, contentType) {
 
 function openBrowser(url) {
   let command;
-  if (process.platform === 'darwin') {
+  if (process.platform === "darwin") {
     command = `open "${url}"`;
-  } else if (process.platform === 'win32') {
+  } else if (process.platform === "win32") {
     // start is a shell built-in; first quoted arg is window title, so use empty title
     command = `cmd /c start "" "${url}"`;
   } else {
@@ -175,46 +177,46 @@ function openBrowser(url) {
 }
 
 function authenticateClient(req) {
-  const apiKey = req.headers['x-api-key'];
+  const apiKey = req.headers["x-api-key"];
 
   // Passthrough: direct Anthropic API key
-  if (apiKey && apiKey.includes('sk-ant')) {
-    if (!authModes.has('passthrough')) {
-      Logger.warn('Passthrough auth attempted but mode not enabled');
+  if (apiKey && apiKey.includes("sk-ant")) {
+    if (!authModes.has("passthrough")) {
+      Logger.warn("Passthrough auth attempted but mode not enabled");
       return null;
     }
-    return { passthroughToken: apiKey, clientName: 'passthrough' };
+    return { token: apiKey, clientName: "passthrough" };
   }
+
+  let keyName = undefined;
 
   // Proxy key
   if (apiKey) {
-    if (!authModes.has('proxy_keys')) {
-      Logger.warn('Proxy key auth attempted but mode not enabled');
-      return null;
-    }
     loadProxyKeys();
-    const keyName = proxyKeys[apiKey];
-    if (!keyName) {
-      Logger.warn('Rejected unknown proxy key');
-      return null;
-    }
-    return { passthroughToken: null, clientName: keyName };
+    keyName = proxyKeys[apiKey];
   }
 
-  // No key
-  if (authModes.has('open')) return { passthroughToken: null, clientName: null };
-  Logger.warn('No API key provided and open mode not enabled');
-  return null;
+  // no key || !proxyKeys[apiKey] -> open
+  if (!keyName) {
+    if (!authModes.has("open")) {
+      Logger.warn("No/invalid API key provided");
+      return null;
+    }
+
+    return { token: null, clientName: "open" };
+  }
+
+  return { token: null, clientName: keyName };
 }
 
 function isRunningInDocker() {
   // Check for /.dockerenv file (Docker creates this)
-  if (fs.existsSync('/.dockerenv')) return true;
+  if (fs.existsSync("/.dockerenv")) return true;
 
   // Check /proc/self/cgroup for docker/containerd (Linux)
   try {
-    const cgroup = fs.readFileSync('/proc/self/cgroup', 'utf8');
-    return cgroup.includes('docker') || cgroup.includes('containerd');
+    const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8");
+    return cgroup.includes("docker") || cgroup.includes("containerd");
   } catch (err) {
     return false;
   }
@@ -230,67 +232,73 @@ async function handleRequest(req, res) {
   try {
     return await _handleRequest(req, res, clientIP, parsedUrl, pathname);
   } catch (error) {
-    Logger.error(`Unhandled error in ${req.method} ${pathname}:`, error.message);
+    Logger.error(
+      `Unhandled error in ${req.method} ${pathname}:`,
+      error.message,
+    );
     if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.writeHead(500, { "Content-Type": "application/json" });
     }
     if (!res.writableEnded) {
-      res.end(JSON.stringify({ error: 'Internal server error' }));
+      res.end(JSON.stringify({ error: "Internal server error" }));
     }
   }
 }
 
 async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
-
   // Auth routes — localhost only
-  if (pathname.startsWith('/auth/')) {
+  if (pathname.startsWith("/auth/")) {
     if (!isLocalRequest(req)) {
-      Logger.warn(`Auth endpoint ${pathname} accessed from non-local IP ${clientIP}, rejected`);
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Not found' }));
+      Logger.warn(
+        `Auth endpoint ${pathname} accessed from non-local IP ${clientIP}, rejected`,
+      );
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
       return;
     }
   }
 
   // Static JS for auth pages
-  if (pathname === '/auth/static/login.js' && req.method === 'GET') {
-    serveStaticFile(res, 'login.js', 'application/javascript');
+  if (pathname === "/auth/static/login.js" && req.method === "GET") {
+    serveStaticFile(res, "login.js", "application/javascript");
     return;
   }
 
   // OAuth Routes
-  if (pathname === '/auth/login' && req.method === 'GET') {
-    serveStaticFile(res, 'login.html', 'text/html');
+  if (pathname === "/auth/login" && req.method === "GET") {
+    serveStaticFile(res, "login.html", "text/html");
     return;
   }
 
-  if (pathname === '/auth/get-url' && req.method === 'GET') {
+  if (pathname === "/auth/get-url" && req.method === "GET") {
     try {
       if (pkceStates.size >= MAX_PKCE_STATES) {
-        res.writeHead(429, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Too many pending authorization requests' }));
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ error: "Too many pending authorization requests" }),
+        );
         return;
       }
       const pkce = OAuthManager.generatePKCE();
       pkceStates.set(pkce.state, {
         code_verifier: pkce.code_verifier,
-        created_at: Date.now()
+        created_at: Date.now(),
       });
 
       const authUrl = OAuthManager.buildAuthorizationURL(pkce);
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ url: authUrl, state: pkce.state }));
-      Logger.info('Generated OAuth authorization URL');
+      Logger.info("Generated OAuth authorization URL");
     } catch (error) {
-      Logger.error('OAuth get-url error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Failed to generate OAuth URL' }));
+      Logger.error("OAuth get-url error:", error.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to generate OAuth URL" }));
     }
     return;
   }
 
-  if (pathname === '/auth/callback' && req.method === 'GET') {
+  if (pathname === "/auth/callback" && req.method === "GET") {
     try {
       const query = parsedUrl.query;
       let code = query.code;
@@ -298,110 +306,137 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
 
       // Handle manual code entry format: "code#state"
       if (query.manual_code) {
-        const parts = query.manual_code.split('#');
+        const parts = query.manual_code.split("#");
         if (parts.length !== 2) {
-          throw new Error('Invalid code format. Expected: code#state');
+          throw new Error("Invalid code format. Expected: code#state");
         }
         code = parts[0];
         state = parts[1];
       }
 
       if (!code || !state) {
-        throw new Error('Missing authorization code or state');
+        throw new Error("Missing authorization code or state");
       }
 
       const pkceData = pkceStates.get(state);
       if (!pkceData) {
-        throw new Error('Invalid or expired state parameter. Please start the authorization process again.');
+        throw new Error(
+          "Invalid or expired state parameter. Please start the authorization process again.",
+        );
       }
 
       pkceStates.delete(state);
 
-      const tokens = await OAuthManager.exchangeCodeForTokens(code, pkceData.code_verifier, state);
+      const tokens = await OAuthManager.exchangeCodeForTokens(
+        code,
+        pkceData.code_verifier,
+        state,
+      );
 
       const tokenData = {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
-        expires_at: Date.now() + (tokens.expires_in * 1000)
+        expires_at: Date.now() + tokens.expires_in * 1000,
       };
       OAuthManager.saveTokens(tokenData);
 
-      serveStaticFile(res, 'callback.html', 'text/html');
-      Logger.info('OAuth authentication successful');
+      serveStaticFile(res, "callback.html", "text/html");
+      Logger.info("OAuth authentication successful");
     } catch (error) {
-      Logger.error('OAuth callback error:', error.message);
-      res.writeHead(302, { 'Location': '/auth/login?error=' + encodeURIComponent(error.message) });
+      Logger.error("OAuth callback error:", error.message);
+      res.writeHead(302, {
+        Location: "/auth/login?error=" + encodeURIComponent(error.message),
+      });
       res.end();
     }
     return;
   }
 
-  if (pathname === '/auth/status' && req.method === 'GET') {
+  if (pathname === "/auth/status" && req.method === "GET") {
     try {
       const isAuthenticated = OAuthManager.isAuthenticated();
       const expiration = OAuthManager.getTokenExpiration();
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        authenticated: isAuthenticated,
-        expires_at: expiration ? expiration.toISOString() : null
-      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          authenticated: isAuthenticated,
+          expires_at: expiration ? expiration.toISOString() : null,
+        }),
+      );
     } catch (error) {
-      Logger.error('Auth status error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Failed to check authentication status' }));
+      Logger.error("Auth status error:", error.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ error: "Failed to check authentication status" }),
+      );
     }
     return;
   }
 
-  if (pathname === '/auth/logout' && req.method === 'POST') {
+  if (pathname === "/auth/logout" && req.method === "POST") {
     try {
       OAuthManager.logout();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, message: 'Logged out successfully' }));
-      Logger.info('User logged out');
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ success: true, message: "Logged out successfully" }),
+      );
+      Logger.info("User logged out");
     } catch (error) {
-      Logger.error('Logout error:', error.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Failed to logout' }));
+      Logger.error("Logout error:", error.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to logout" }));
     }
     return;
   }
 
-  if (pathname === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', server: 'claude-code-proxy', timestamp: Date.now() }));
+  if (pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        server: "claude-code-proxy",
+        timestamp: Date.now(),
+      }),
+    );
     return;
   }
-  
-  if (req.method === 'POST' && (pathname === '/v1/messages' || pathname.match(/^\/v1\/\w+\/messages$/))) {
+
+  if (
+    req.method === "POST" &&
+    (pathname === "/v1/messages" || pathname.match(/^\/v1\/\w+\/messages$/))
+  ) {
     try {
       const auth = authenticateClient(req);
       if (!auth) {
-        Logger.warn(`Auth rejected for ${req.method} ${pathname} from ${clientIP}`);
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid proxy API key' }));
+        Logger.warn(
+          `Auth rejected for ${req.method} ${pathname} from ${clientIP}`,
+        );
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid proxy API key" }));
         return;
       }
       if (auth.clientName) {
         Logger.info(`Client: ${auth.clientName}`);
       }
 
-      Logger.headers('Incoming request headers', req.headers);
+      Logger.headers("Incoming request headers", req.headers);
       const body = await parseBody(req);
 
-      if (!body.model || typeof body.model !== 'string') {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
+      if (!body.model || typeof body.model !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: 'Missing or invalid "model" field' }));
         return;
       }
       if (!Array.isArray(body.messages) || body.messages.length === 0) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Missing or invalid "messages" field' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ error: 'Missing or invalid "messages" field' }),
+        );
         return;
       }
 
-      Logger.body('Incoming request body', body);
+      Logger.body("Incoming request body", body);
 
       let presetName = null;
       const presetMatch = pathname.match(/^\/v1\/(\w+)\/messages$/);
@@ -410,12 +445,12 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
         Logger.debug(`Detected preset: ${presetName}`);
       }
 
-      await new ClaudeRequest(auth.passthroughToken).handleResponse(res, body, presetName);
+      await new ClaudeRequest(auth.token).handleResponse(res, body, presetName);
     } catch (error) {
       const status = error.statusCode || 500;
       Logger.error(`Request error (${status}):`, error.message);
       if (!res.headersSent) {
-        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: error.message }));
       }
     }
@@ -423,29 +458,30 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
   }
 
   Logger.debug(`404 Not Found: ${req.method} ${pathname}`);
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not found' }));
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
 }
 
 function startServer() {
   loadConfig();
 
   if (config.auth_modes) {
-    authModes = new Set(config.auth_modes.split(',').map(s => s.trim()));
-    const valid = ['open', 'proxy_keys', 'passthrough'];
+    authModes = new Set(config.auth_modes.split(",").map((s) => s.trim()));
+    const valid = ["open", "proxy_keys", "passthrough"];
     for (const mode of authModes) {
       if (!valid.includes(mode)) {
-        Logger.error(`Unknown auth_mode: ${mode}. Valid: ${valid.join(', ')}`);
+        Logger.error(`Unknown auth_mode: ${mode}. Valid: ${valid.join(", ")}`);
         process.exit(1);
       }
     }
   }
-  Logger.info(`Auth modes: ${[...authModes].join(', ')}`);
+  Logger.info(`Auth modes: ${[...authModes].join(", ")}`);
 
   loadProxyKeys();
 
   const server = http.createServer(handleRequest);
-  const requestTimeout = Number(config.request_timeout) || DEFAULT_REQUEST_TIMEOUT;
+  const requestTimeout =
+    Number(config.request_timeout) || DEFAULT_REQUEST_TIMEOUT;
   server.requestTimeout = requestTimeout;
   server.headersTimeout = Math.min(HEADERS_TIMEOUT, requestTimeout);
   server.timeout = IDLE_SOCKET_TIMEOUT;
@@ -453,12 +489,12 @@ function startServer() {
   const port = parseInt(config.port) || 3000;
 
   // Smart host binding: auto-detect Docker or use config
-  const host = config.host || (isRunningInDocker() ? '0.0.0.0' : '127.0.0.1');
+  const host = config.host || (isRunningInDocker() ? "0.0.0.0" : "127.0.0.1");
 
-  server.on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
       Logger.error(`Port ${port} is already in use`);
-    } else if (error.code === 'EACCES') {
+    } else if (error.code === "EACCES") {
       Logger.error(`Permission denied to bind to ${host}:${port}`);
     } else {
       Logger.error(`Server error: ${error.message}`);
@@ -468,52 +504,54 @@ function startServer() {
 
   server.listen(port, host, () => {
     Logger.info(`claude-code-proxy server listening on ${host}:${port}`);
-    Logger.info(`Timeouts: request=${requestTimeout}ms, headers=${server.headersTimeout}ms, idle=${IDLE_SOCKET_TIMEOUT}ms`);
+    Logger.info(
+      `Timeouts: request=${requestTimeout}ms, headers=${server.headersTimeout}ms, idle=${IDLE_SOCKET_TIMEOUT}ms`,
+    );
 
     // Display authentication status
     const isAuthenticated = OAuthManager.isAuthenticated();
     const expiration = OAuthManager.getTokenExpiration();
 
-    Logger.info('');
-    Logger.info('Authentication Status:');
+    Logger.info("");
+    Logger.info("Authentication Status:");
     if (isAuthenticated && expiration) {
       Logger.info(`  ✓ Authenticated until ${expiration.toLocaleString()}`);
     } else {
-      Logger.info('  ✗ Not authenticated');
+      Logger.info("  ✗ Not authenticated");
       const authUrl = `http://localhost:${port}/auth/login`;
       Logger.info(`  → Visit ${authUrl} to authenticate`);
 
       // Auto-open browser if configured (only works when running natively)
-      const autoOpenBrowser = config.auto_open_browser !== 'false';
+      const autoOpenBrowser = config.auto_open_browser !== "false";
       if (!isAuthenticated && autoOpenBrowser && !isRunningInDocker()) {
-        Logger.info('  → Opening browser for authentication...');
+        Logger.info("  → Opening browser for authentication...");
         setTimeout(() => openBrowser(authUrl), 1000);
       }
     }
-    Logger.info('');
+    Logger.info("");
   });
 
-  process.on('SIGTERM', () => {
-    Logger.info('Shutting down...');
+  process.on("SIGTERM", () => {
+    Logger.info("Shutting down...");
     server.close(() => process.exit(0));
   });
 
-  process.on('SIGINT', () => {
-    Logger.info('Shutting down...');
+  process.on("SIGINT", () => {
+    Logger.info("Shutting down...");
     server.close(() => process.exit(0));
   });
 
-  process.on('uncaughtException', (error) => {
-    Logger.error('Uncaught exception:', error.message);
-    Logger.debug('Stack:', error.stack);
+  process.on("uncaughtException", (error) => {
+    Logger.error("Uncaught exception:", error.message);
+    Logger.debug("Stack:", error.stack);
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason) => {
+  process.on("unhandledRejection", (reason) => {
     const message = reason instanceof Error ? reason.message : String(reason);
-    Logger.error('Unhandled promise rejection:', message);
+    Logger.error("Unhandled promise rejection:", message);
     if (reason instanceof Error) {
-      Logger.debug('Stack:', reason.stack);
+      Logger.debug("Stack:", reason.stack);
     }
   });
 }
