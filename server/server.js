@@ -134,6 +134,11 @@ function isLocalRequest(req) {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+const HTML_404 = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>404</title>
+<style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;color:#333}div{text-align:center}h1{font-size:4em;margin:0;color:#999}p{margin:.5em 0;color:#666}</style>
+</head><body><div><h1>404</h1><p>Not found</p></div></body></html>`;
+
 const STATIC_SECURITY_HEADERS = {
   "Content-Security-Policy":
     "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'",
@@ -145,8 +150,8 @@ function serveStaticFile(res, filePath, contentType) {
   fs.readFile(staticPath, "utf8", (err, data) => {
     if (err) {
       Logger.warn(`Static file not found: ${filePath}`);
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found");
+      res.writeHead(404, { "Content-Type": "text/html" });
+      res.end(HTML_404);
       return;
     }
     const headers = { "Content-Type": contentType };
@@ -227,11 +232,11 @@ async function handleRequest(req, res) {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
 
-  Logger.info(`${req.method} ${pathname} from ${clientIP}`);
+  Logger.info(`${req.method} ${pathname}`);
 
   res.on('finish', () => {
     const tag = req.clientName ? ` [${req.clientName}]` : '';
-    Logger.info(`${req.method} ${pathname}${tag} -> ${res.statusCode}`);
+    Logger.info(`[${clientIP}] ${req.method} ${pathname}${tag} -> ${res.statusCode}`);
   });
 
   try {
@@ -257,8 +262,8 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
       Logger.warn(
         `Auth endpoint ${pathname} accessed from non-local IP ${clientIP}, rejected`,
       );
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not found" }));
+      res.writeHead(404, { "Content-Type": "text/html" });
+      res.end(HTML_404);
       return;
     }
   }
@@ -461,8 +466,8 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
   }
 
   Logger.debug(`404 Not Found: ${req.method} ${pathname}`);
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Not found" }));
+  res.writeHead(404, { "Content-Type": "text/html" });
+  res.end(HTML_404);
 }
 
 function startServer() {
