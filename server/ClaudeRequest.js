@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { Transform } = require('stream');
 const Logger = require('./Logger');
 const OAuthManager = require('./OAuthManager');
 
@@ -583,7 +584,43 @@ class ClaudeRequest {
     const contentType = claudeResponse.headers['content-type'] || '';
     if (contentType.includes('text/event-stream')) {
       Logger.headers('Outgoing response headers to client', res.getHeaders());
-      
+
+      const stats = { model: null, inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0, stopReason: null };
+      const statsStream = new Transform({
+        transform(chunk, encoding, callback) {
+          try {
+            for (const line of chunk.toString().split('\n')) {
+              if (!line.startsWith('data: ')) continue;
+              try {
+                const data = JSON.parse(line.substring(6));
+                if (data.type === 'message_start' && data.message) {
+                  stats.model = data.message.model;
+                  const u = data.message.usage;
+                  if (u) {
+                    stats.inputTokens = u.input_tokens || 0;
+                    stats.cacheCreation = u.cache_creation_input_tokens || 0;
+                    stats.cacheRead = u.cache_read_input_tokens || 0;
+                  }
+                } else if (data.type === 'message_delta') {
+                  if (data.delta?.stop_reason) stats.stopReason = data.delta.stop_reason;
+                  if (data.usage) stats.outputTokens = data.usage.output_tokens || 0;
+                }
+              } catch (e) { /* partial JSON */ }
+            }
+          } catch (e) { /* ignore */ }
+          callback(null, chunk);
+        }
+      });
+
+      const logStats = () => {
+        let msg = `Response: in=${stats.inputTokens}`;
+        if (stats.cacheCreation || stats.cacheRead) {
+          msg += ` (cache_write=${stats.cacheCreation}, cache_read=${stats.cacheRead})`;
+        }
+        msg += `, out=${stats.outputTokens}, stop=${stats.stopReason}, model=${stats.model}`;
+        Logger.info(msg);
+      };
+
       claudeResponse.on('error', (err) => {
         Logger.error(`Claude SSE stream error: ${err.message}`);
         if (!res.headersSent) {
@@ -593,17 +630,17 @@ class ClaudeRequest {
           res.end(JSON.stringify({ error: 'Upstream response error' }));
         }
       });
-      
+
       res.on('close', () => {
         Logger.debug('Client disconnected, cleaning up streams');
         if (!claudeResponse.destroyed) {
           claudeResponse.destroy();
         }
       });
-      
+
       if (Logger.getLogLevel() >= 3) {
         const debugStream = Logger.createDebugStream('Claude SSE', extractClaudeText);
-        
+
         debugStream.on('error', (err) => {
           Logger.error(`Debug stream processing error: ${err.message}`);
           if (!res.headersSent) {
@@ -613,16 +650,17 @@ class ClaudeRequest {
             res.end(JSON.stringify({ error: 'Stream processing error' }));
           }
         });
-        
-        claudeResponse.pipe(debugStream).pipe(res);
+
+        claudeResponse.pipe(statsStream).pipe(debugStream).pipe(res);
         debugStream.on('end', () => {
           Logger.debug('\n');
           Logger.debug('Streaming response sent back to client');
+          logStats();
         });
       } else {
-        claudeResponse.pipe(res);
-        claudeResponse.on('end', () => {
-          Logger.debug('Streaming response sent back to client');
+        claudeResponse.pipe(statsStream).pipe(res);
+        statsStream.on('end', () => {
+          logStats();
         });
       }
     } else {
@@ -645,6 +683,17 @@ class ClaudeRequest {
         Logger.debug(`Non-streaming response (${claudeResponse.statusCode}): ${responseData.substring(0, 500)}`);
         try {
           const jsonData = JSON.parse(responseData);
+
+          if (jsonData.usage) {
+            const u = jsonData.usage;
+            let msg = `Response: in=${u.input_tokens || 0}`;
+            if (u.cache_creation_input_tokens || u.cache_read_input_tokens) {
+              msg += ` (cache_write=${u.cache_creation_input_tokens || 0}, cache_read=${u.cache_read_input_tokens || 0})`;
+            }
+            msg += `, out=${u.output_tokens || 0}, stop=${jsonData.stop_reason}, model=${jsonData.model}`;
+            Logger.info(msg);
+          }
+
           res.setHeader('Content-Type', 'application/json');
           Logger.headers('Outgoing response headers to client', res.getHeaders());
           res.end(JSON.stringify(jsonData));
