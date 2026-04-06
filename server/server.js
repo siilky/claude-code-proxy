@@ -268,10 +268,16 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
     }
   }
 
-  // Static JS for auth pages
-  if (pathname === "/auth/static/login.js" && req.method === "GET") {
-    serveStaticFile(res, "login.js", "application/javascript");
-    return;
+  // Static files
+  if (req.method === "GET" && pathname.startsWith("/static/")) {
+    const file = path.basename(pathname);
+    const ext = path.extname(file);
+    const types = { ".js": "application/javascript", ".css": "text/css" };
+    const ct = types[ext];
+    if (ct && /^[\w.-]+$/.test(file)) {
+      serveStaticFile(res, file, ct);
+      return;
+    }
   }
 
   // OAuth Routes
@@ -397,6 +403,11 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Failed to logout" }));
     }
+    return;
+  }
+
+  if (pathname === "/" && req.method === "GET") {
+    serveStaticFile(res, "index.html", "text/html");
     return;
   }
 
