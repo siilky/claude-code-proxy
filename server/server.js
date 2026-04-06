@@ -102,6 +102,11 @@ function getClientIP(req) {
          '127.0.0.1';
 }
 
+function isLocalRequest(req) {
+  const addr = req.socket.remoteAddress;
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
 function serveStaticFile(res, filePath, contentType) {
   const staticPath = path.join(__dirname, 'static', filePath);
   fs.readFile(staticPath, 'utf8', (err, data) => {
@@ -176,14 +181,13 @@ async function handleRequest(req, res) {
 
   Logger.info(`${req.method} ${pathname} from ${clientIP}`);
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
-    return;
+  // Auth routes — localhost only
+  if (pathname.startsWith('/auth/')) {
+    if (!isLocalRequest(req)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
   }
 
   // OAuth Routes

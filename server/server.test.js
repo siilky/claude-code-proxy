@@ -74,16 +74,6 @@ describe('OAuth Routes Integration Tests', () => {
       const parsedUrl = url.parse(req.url, true);
       const pathname = parsedUrl.pathname;
 
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-
-      if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-      }
-
       // OAuth Routes
       if (pathname === '/auth/login' && req.method === 'GET') {
         try {
@@ -383,20 +373,13 @@ describe('OAuth Routes Integration Tests', () => {
     });
   });
 
-  describe('CORS headers', () => {
-    it('should include CORS headers in all responses', async () => {
+  describe('No CORS headers', () => {
+    it('should not include CORS headers in responses', async () => {
       const response = await request(server).get('/auth/status');
 
-      expect(response.headers['access-control-allow-origin']).toBe('*');
-      expect(response.headers['access-control-allow-methods']).toBe('GET, POST, PUT, DELETE, OPTIONS');
-      expect(response.headers['access-control-allow-headers']).toBe('Content-Type, Authorization, X-Requested-With');
-    });
-
-    it('should handle OPTIONS requests', async () => {
-      const response = await request(server).options('/auth/status');
-
-      expect(response.status).toBe(200);
-      expect(response.headers['access-control-allow-origin']).toBe('*');
+      expect(response.headers['access-control-allow-origin']).toBeUndefined();
+      expect(response.headers['access-control-allow-methods']).toBeUndefined();
+      expect(response.headers['access-control-allow-headers']).toBeUndefined();
     });
   });
 });
