@@ -243,7 +243,7 @@ async function handleRequest(req, res) {
     return await _handleRequest(req, res, clientIP, parsedUrl, pathname);
   } catch (error) {
     Logger.error(
-      `Unhandled error in ${req.method} ${pathname}:`,
+      `[${clientIP}] Unhandled error in ${req.method} ${pathname}:`,
       error.message,
     );
     if (!res.headersSent) {
@@ -467,7 +467,7 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
       await new ClaudeRequest(auth.token, auth.clientName).handleResponse(res, body, presetName);
     } catch (error) {
       const status = error.statusCode || 500;
-      Logger.error(`Request error (${status}):`, error.message);
+      Logger.error(`[${clientIP}] Request error (${status}):`, error.message);
       if (!res.headersSent) {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: error.message }));

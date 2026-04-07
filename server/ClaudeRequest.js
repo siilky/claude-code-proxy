@@ -7,7 +7,7 @@ const { Transform } = require('stream');
 const Logger = require('./Logger');
 const OAuthManager = require('./OAuthManager');
 
-const STRIP_TTL = true;
+const STRIP_TTL = false;
 const TOKEN_REFRESH_METHOD = 'OAUTH'; // 'OAUTH' or 'CLAUDE_CODE_CLI'
 
 // Load configuration
@@ -615,9 +615,7 @@ class ClaudeRequest {
 
       const logStats = () => {
         let msg = `${this.logTag}Response: in=${stats.inputTokens}`;
-        if (stats.cacheCreation || stats.cacheRead) {
-          msg += ` (cache_write=${stats.cacheCreation}, cache_read=${stats.cacheRead})`;
-        }
+        msg += ` (cache_write=${stats.cacheCreation}, cache_read=${stats.cacheRead})`;
         msg += `, out=${stats.outputTokens}, stop=${stats.stopReason}, model=${stats.model}`;
         Logger.info(msg);
       };
@@ -688,9 +686,7 @@ class ClaudeRequest {
           if (jsonData.usage) {
             const u = jsonData.usage;
             let msg = `${this.logTag}Response: in=${u.input_tokens || 0}`;
-            if (u.cache_creation_input_tokens || u.cache_read_input_tokens) {
-              msg += ` (cache_write=${u.cache_creation_input_tokens || 0}, cache_read=${u.cache_read_input_tokens || 0})`;
-            }
+            msg += ` (cache_write=${u.cache_creation_input_tokens || 0}, cache_read=${u.cache_read_input_tokens || 0})`;
             msg += `, out=${u.output_tokens || 0}, stop=${jsonData.stop_reason}, model=${jsonData.model}`;
             Logger.info(msg);
           }
