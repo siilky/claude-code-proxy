@@ -421,15 +421,16 @@ class ClaudeRequest {
   injectCacheBreakpoints(body) {
     if (!body || !INJECT_CACHE_BREAKPOINTS) return;
 
-    const target = Array.isArray(body.tools) && body.tools.length > 0
-      ? body.tools[body.tools.length - 1]
-      : Array.isArray(body.system) && body.system.length > 0
-        ? body.system[body.system.length - 1]
-        : null;
+    const mark = (arr) => {
+      if (Array.isArray(arr) && arr.length > 0) {
+        arr[arr.length - 1].cache_control = { type: 'ephemeral' };
+        return true;
+      }
+      return false;
+    };
 
-    if (target) {
-      target.cache_control = { type: 'ephemeral' };
-    }
+    mark(body.system);
+    mark(body.tools);
   }
 
   loadPreset(presetName) {
