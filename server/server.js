@@ -85,12 +85,13 @@ function loadConfig() {
 function parseBody(req) {
   const maxBytes = Number(config.max_body_size) || DEFAULT_MAX_BODY_BYTES;
   return new Promise((resolve, reject) => {
+    req.setEncoding("utf8");
     let body = "";
     let received = 0;
     let rejected = false;
     req.on("data", (chunk) => {
       if (rejected) return;
-      received += chunk.length;
+      received += Buffer.byteLength(chunk);
       if (received > maxBytes) {
         rejected = true;
         req.destroy();
@@ -101,7 +102,7 @@ function parseBody(req) {
         reject(err);
         return;
       }
-      body += chunk.toString();
+      body += chunk;
     });
     req.on("end", () => {
       if (rejected) return;

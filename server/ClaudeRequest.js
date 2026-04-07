@@ -276,6 +276,7 @@ class ClaudeRequest {
 
       const response = await new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
+          res.setEncoding('utf8');
           let responseData = '';
           res.on('data', chunk => responseData += chunk);
           res.on('end', () => {
@@ -680,6 +681,7 @@ class ClaudeRequest {
         });
       }
     } else {
+      claudeResponse.setEncoding('utf8');
       let responseData = '';
       claudeResponse.on('data', chunk => {
         responseData += chunk;
