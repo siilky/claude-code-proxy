@@ -39,6 +39,7 @@ const loadConfig = () => {
 
 const CONFIG = loadConfig();
 const FILTER_SAMPLING_PARAMS = CONFIG.filter_sampling_params === true; // Default to false
+const INJECT_CACHE_BREAKPOINTS = CONFIG.inject_cache_breakpoints !== false; // Default to true
 const FALLBACK_TO_CLAUDE_CODE = CONFIG.fallback_to_claude_code !== false; // Default to true
 
 class ClaudeRequest {
@@ -412,8 +413,23 @@ class ClaudeRequest {
 
     body = this.stripTtlFromCacheControl(body);
     body = this.filterSamplingParams(body);
+    this.injectCacheBreakpoints(body);
 
     return body;
+  }
+
+  injectCacheBreakpoints(body) {
+    if (!body || !INJECT_CACHE_BREAKPOINTS) return;
+
+    const target = Array.isArray(body.tools) && body.tools.length > 0
+      ? body.tools[body.tools.length - 1]
+      : Array.isArray(body.system) && body.system.length > 0
+        ? body.system[body.system.length - 1]
+        : null;
+
+    if (target) {
+      target.cache_control = { type: 'ephemeral' };
+    }
   }
 
   loadPreset(presetName) {
