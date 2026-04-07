@@ -120,11 +120,16 @@ function parseBody(req) {
   });
 }
 
+function getHeaderIP(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return req.headers["x-real-ip"] || null;
+}
+
 function getClientIP(req) {
   if (config.trust_proxy) {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (forwarded) return forwarded.split(",")[0].trim();
-    if (req.headers["x-real-ip"]) return req.headers["x-real-ip"];
+    const headerIP = getHeaderIP(req);
+    if (headerIP) return headerIP;
   }
   return req.socket.remoteAddress || "127.0.0.1";
 }
@@ -229,10 +234,12 @@ function isRunningInDocker() {
 
 async function handleRequest(req, res) {
   const clientIP = getClientIP(req);
+  const headerIP = getHeaderIP(req);
+  const ipLabel = headerIP && headerIP !== clientIP ? `${clientIP} (${headerIP})` : clientIP;
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
 
-  Logger.info(`${req.method} ${pathname}`);
+  Logger.info(`[${ipLabel}] ${req.method} ${pathname}`);
 
   res.on('finish', () => {
     const tag = req.clientName ? ` [${req.clientName}]` : '';
