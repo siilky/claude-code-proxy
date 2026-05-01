@@ -131,6 +131,8 @@ class ClaudeRequest {
       delete body.temperature;
       Logger.debug('Removed temperature=1.0 from request (default value, no top_p specified)');
     }
+    
+    delete body.top_k;
 
     return body;
   }
@@ -488,6 +490,12 @@ class ClaudeRequest {
   async makeRequest(body, presetName = null) {
     const token = await this.getAuthToken();
     const headers = this.getHeaders(token);
+    
+    // who's the thing that does the system prompt as string?
+    if (body.system && typeof(body.system) === 'string') {
+      body.system = [{ type: 'text', text: body.system }];
+    }
+
     const processedBody = this.processRequestBody(body, presetName);
 
     Logger.headers('Outgoing headers to Claude', headers);
@@ -513,8 +521,8 @@ class ClaudeRequest {
         reject(err);
       });
 
-      req.setTimeout(120000, () => {
-        Logger.error(`${this.logTag}Claude API request timed out (120s)`);
+      req.setTimeout(300000, () => {
+        Logger.error(`${this.logTag}Claude API request timed out (300s)`);
         req.destroy();
         reject(new Error('Claude API request timeout'));
       });
