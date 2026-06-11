@@ -424,6 +424,7 @@ class ClaudeRequest {
   injectCacheBreakpoints(body) {
     if (!body || !INJECT_CACHE_BREAKPOINTS) return;
 
+    /*
     const mark = (arr) => {
       if (Array.isArray(arr) && arr.length > 0) {
         arr[arr.length - 1].cache_control = { type: 'ephemeral' };
@@ -434,6 +435,9 @@ class ClaudeRequest {
 
     mark(body.system);
     mark(body.tools);
+    */
+    // automatic cache control
+    body["cache_control"] = { type: 'ephemeral' };
   }
 
   loadPreset(presetName) {
