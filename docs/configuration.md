@@ -41,4 +41,3 @@ auth_modes=proxy_keys,passthrough
 | `tokens.json` | `~/.claude-code-proxy/tokens.json` | OAuth access/refresh tokens (managed by OAuthManager) |
 | `keys.json` | `~/.claude-code-proxy/keys.json` | Proxy API keys for client auth (managed manually) |
 | `.credentials.json` | `~/.claude/.credentials.json` | Claude Code CLI credentials (fallback, read-only) |
-| Presets | `server/presets/*.json` | Request presets (system prompts, suffixes) |

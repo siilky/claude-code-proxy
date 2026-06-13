@@ -5,17 +5,17 @@
 Four modules in `server/`:
 
 - **server.js** - HTTP server, routing, CORS, PKCE state management, client authentication (`authenticateClient`). Serves OAuth login/callback pages and forwards `/v1/messages` requests to Claude API.
-- **ClaudeRequest.js** - Core request handler. Receives an optional passthrough token, resolves OAuth tokens, injects the "Claude Code" system prompt, applies presets, strips TTL from cache_control, optionally filters sampling params, forwards HTTPS requests to Anthropic, and streams responses back.
+- **ClaudeRequest.js** - Core request handler. Receives an optional passthrough token, resolves OAuth tokens, injects the "Claude Code" system prompt, strips TTL from cache_control, optionally filters sampling params, forwards HTTPS requests to Anthropic, and streams responses back.
 - **OAuthManager.js** - OAuth 2.0 PKCE flow (RFC 7636). Handles authorization URL generation, code exchange, token refresh with race condition protection, and persistent token storage at `~/.claude-code-proxy/tokens.json`. Singleton pattern.
 - **Logger.js** - Level-based logging (ERROR/WARN/INFO/DEBUG/TRACE) with stream debugging support.
 
 ## Request Flow
 
-1. Client sends POST to `/v1/messages` (or `/v1/{presetName}/messages` for presets)
+1. Client sends POST to `/v1/messages`
 2. `authenticateClient(req)` checks `x-api-key` against `auth_modes` -- rejects with 403 if unauthorized
 3. Body parsed, `ClaudeRequest(passthroughToken)` created
 4. Auth token resolved: passthrough token used directly, or OAuth token from cache/refresh
-5. System prompt "Claude Code" prefix injected; preset applied if path includes preset name
+5. System prompt "Claude Code" prefix injected
 6. TTL stripped from cache_control; sampling params optionally filtered
 7. Request forwarded to `api.anthropic.com`; on 401 (non-passthrough) -- token refresh and retry
 8. Response streamed back to client (SSE)

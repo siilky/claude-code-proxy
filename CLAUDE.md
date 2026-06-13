@@ -13,7 +13,7 @@ npx jest server/<file> # Single test file
 ## Modules
 
 - **server.js** - HTTP server, routing, client auth (`authenticateClient`), OAuth pages, PKCE state
-- **ClaudeRequest.js** - Request forwarding to Anthropic, token resolution, system prompt injection, presets, streaming
+- **ClaudeRequest.js** - Request forwarding to Anthropic, token resolution, system prompt injection, streaming
 - **OAuthManager.js** - OAuth 2.0 PKCE flow, token storage (`~/.claude-code-proxy/tokens.json`)
 - **Logger.js** - Level-based logging with stream debugging
 

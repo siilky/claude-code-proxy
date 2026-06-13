@@ -188,7 +188,15 @@ function openBrowser(url) {
 }
 
 function authenticateClient(req) {
-  const apiKey = req.headers["x-api-key"];
+  let apiKey = req.headers["x-api-key"];
+
+  if (!apiKey) {
+    apiKey = req.headers["authorization"];
+    if (apiKey && apiKey.startsWith("Bearer ")) {
+      apiKey = apiKey.substring(7).trim();
+      delete req.headers["authorization"];
+    }
+  }
 
   // Passthrough: direct Anthropic API key
   if (apiKey && apiKey.includes("sk-ant")) {
@@ -431,10 +439,7 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
     return;
   }
 
-  if (
-    req.method === "POST" &&
-    (pathname === "/v1/messages" || pathname.match(/^\/v1\/\w+\/messages$/))
-  ) {
+  if (req.method === "POST" && pathname === "/v1/messages") {
     try {
       const auth = authenticateClient(req);
       if (!auth) {
@@ -465,14 +470,14 @@ async function _handleRequest(req, res, clientIP, parsedUrl, pathname) {
 
       Logger.body("Incoming request body", body);
 
-      let presetName = null;
-      const presetMatch = pathname.match(/^\/v1\/(\w+)\/messages$/);
-      if (presetMatch) {
-        presetName = presetMatch[1];
-        Logger.debug(`Detected preset: ${presetName}`);
-      }
+      // claude-cli forwards its own headers verbatim; other clients get the
+      // proxy's injected Claude Code headers and body normalization.
+      const isClaudeCli = (req.headers["user-agent"] || "").startsWith("claude-cli/");
+      const request = isClaudeCli
+        ? new ClaudeRequest(auth.token, auth.clientName, req.headers)
+        : new ClaudeRequest(auth.token, auth.clientName);
+      await request.handleResponse(res, body);
 
-      await new ClaudeRequest(auth.token, auth.clientName).handleResponse(res, body, presetName);
     } catch (error) {
       const status = error.statusCode || 500;
       Logger.error(`[${clientIP}] Request error (${status}):`, error.message);

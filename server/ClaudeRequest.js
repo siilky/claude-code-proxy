@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 const { Transform } = require('stream');
+const zlib = require('zlib');
 const Logger = require('./Logger');
 const OAuthManager = require('./OAuthManager');
 
@@ -43,15 +44,19 @@ const INJECT_CACHE_BREAKPOINTS = CONFIG.inject_cache_breakpoints !== false; // D
 const FALLBACK_TO_CLAUDE_CODE = CONFIG.fallback_to_claude_code !== false; // Default to true
 
 class ClaudeRequest {
-  static presetCache = new Map();
   static refreshPromise = null;
 
-  constructor(passthroughToken = null, clientName = null) {
+  constructor(passthroughToken = null, userName = null, headers = null) {
     this.API_URL = 'https://api.anthropic.com/v1/messages';
-    this.VERSION = '2023-06-01';
-    this.BETA_HEADER = 'claude-code-20250219,files-api-2025-04-14,oauth-2025-04-20,interleaved-thinking-2025-05-14';
+    if (headers) {
+      this.HEADERS = headers;
+    } else {
+      this.VERSION = '2023-06-01';
+      this.BETA_HEADER = 'claude-code-20250219,files-api-2025-04-14,oauth-2025-04-20,interleaved-thinking-2025-05-14';
+    }
+
     this.passthroughToken = passthroughToken;
-    this.logTag = clientName ? `[${clientName}] ` : '';
+    this.logTag = userName ? `[${userName}] ` : '';
     this.refreshToken = TOKEN_REFRESH_METHOD === 'OAUTH' ? this.refreshTokenWithOauth : this.refreshTokenWithClaudeCodeCli;
   }
 
@@ -336,6 +341,19 @@ class ClaudeRequest {
   }
 
   getHeaders(token) {
+    if (this.HEADERS) {
+      // claude-cli path: forward the client's own headers, but strip client auth
+      // (we set our own Authorization), the original Host, and Content-Length —
+      // the body is re-serialized, so Node must recompute the length.
+      const headers = { ...this.HEADERS };
+      delete headers['host'];
+      delete headers['content-length'];
+      delete headers['x-api-key'];
+      delete headers['authorization'];
+      headers['Authorization'] = token;
+      return headers;
+    }
+
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': token,
@@ -392,7 +410,40 @@ class ClaudeRequest {
     }
   }
 
-  processRequestBody(body, presetName = null) {
+  static decodeResponseStream(response) {
+    const header = response.headers['content-encoding'];
+    const encodings = String(header || '')
+      .split(',')
+      .map(encoding => encoding.trim().toLowerCase())
+      .filter(encoding => encoding && encoding !== 'identity');
+
+    if (encodings.length === 0) {
+      return response;
+    }
+
+    const supported = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+    for (const encoding of encodings) {
+      if (!supported.has(encoding)) {
+        Logger.warn(`Unsupported upstream content-encoding "${encoding}", forwarding raw stream`);
+        return response;
+      }
+    }
+
+    let stream = response;
+    for (const encoding of encodings.reverse()) {
+      if (encoding === 'gzip' || encoding === 'x-gzip') {
+        stream = stream.pipe(zlib.createGunzip());
+      } else if (encoding === 'deflate') {
+        stream = stream.pipe(zlib.createInflate());
+      } else if (encoding === 'br') {
+        stream = stream.pipe(zlib.createBrotliDecompress());
+      }
+    }
+
+    return stream;
+  }
+
+  processRequestBody(body) {
     if (!body) return body;
 
     const systemPrompt = {
@@ -408,10 +459,6 @@ class ClaudeRequest {
       }
     } else {
       body.system = [systemPrompt];
-    }
-
-    if (presetName) {
-      this.applyPreset(body, presetName);
     }
 
     body = this.stripTtlFromCacheControl(body);
@@ -440,67 +487,18 @@ class ClaudeRequest {
     body["cache_control"] = { type: 'ephemeral' };
   }
 
-  loadPreset(presetName) {
-    if (ClaudeRequest.presetCache.has(presetName)) {
-      return ClaudeRequest.presetCache.get(presetName);
-    }
-
-    try {
-      const presetPath = path.join(__dirname, 'presets', `${presetName}.json`);
-      const presetData = fs.readFileSync(presetPath, 'utf8');
-      const preset = JSON.parse(presetData);
-      ClaudeRequest.presetCache.set(presetName, preset);
-      return preset;
-    } catch (error) {
-      Logger.info(`Failed to load preset ${presetName}: ${error.message}`);
-      ClaudeRequest.presetCache.set(presetName, null);
-      return null;
-    }
-  }
-
-  applyPreset(body, presetName) {
-    const preset = this.loadPreset(presetName);
-    if (!preset) {
-      Logger.warn(`Unknown preset: ${presetName}`);
-      return;
-    }
-
-    if (preset.system) {
-      const presetSystemPrompt = {
-        type: 'text',
-        text: preset.system
-      };
-      body.system.push(presetSystemPrompt);
-    }
-
-    // Use suffixEt only when thinking is enabled, otherwise use regular suffix
-    const hasThinking = body.thinking && body.thinking.type === 'enabled';
-    const suffix = hasThinking ? preset.suffixEt : preset.suffix;
-    
-    if (suffix && body.messages && body.messages.length > 0) {
-      const lastUserIndex = body.messages.map(m => m.role).lastIndexOf('user');
-      if (lastUserIndex !== -1) {
-        const suffixMsg = {
-          role: 'user',
-          content: [{ type: 'text', text: suffix }]
-        };
-        body.messages.splice(lastUserIndex + 1, 0, suffixMsg);
-      }
-    }
-
-    Logger.debug(`Applied preset: ${presetName}`);
-  }
-
-  async makeRequest(body, presetName = null) {
+  async makeRequest(body) {
     const token = await this.getAuthToken();
     const headers = this.getHeaders(token);
-    
+
     // who's the thing that does the system prompt as string?
     if (body.system && typeof(body.system) === 'string') {
       body.system = [{ type: 'text', text: body.system }];
     }
 
-    const processedBody = this.processRequestBody(body, presetName);
+    // Under claude-cli we forward the body untouched; otherwise inject the
+    // Claude Code system prompt and normalize the request.
+    const processedBody = this.HEADERS ? body : this.processRequestBody(body);
 
     Logger.headers('Outgoing headers to Claude', headers);
     Logger.body('Final request to Claude', processedBody);
@@ -536,9 +534,9 @@ class ClaudeRequest {
     });
   }
 
-  async handleResponse(res, body, presetName = null) {
+  async handleResponse(res, body) {
     try {
-      const claudeResponse = await this.makeRequest(body, presetName);
+      const claudeResponse = await this.makeRequest(body);
       
       if (claudeResponse.statusCode === 401 && !this.passthroughToken) {
         Logger.info(`${this.logTag}Got 401, refreshing token`);
@@ -546,7 +544,7 @@ class ClaudeRequest {
 
         try {
           await this.loadOrRefreshToken();
-          const retryResponse = await this.makeRequest(body, presetName);
+          const retryResponse = await this.makeRequest(body);
           res.statusCode = retryResponse.statusCode;
           Logger.info(`${this.logTag}Token refreshed, retry status: ${retryResponse.statusCode}`);
           Logger.headers('Claude retry response headers', retryResponse.headers);
@@ -613,6 +611,24 @@ class ClaudeRequest {
     };
 
     const contentType = claudeResponse.headers['content-type'] || '';
+    const responseBody = ClaudeRequest.decodeResponseStream(claudeResponse);
+
+    let responseEndedByError = false;
+    const endWithUpstreamError = (err, label) => {
+      if (responseEndedByError) return;
+      responseEndedByError = true;
+      Logger.error(`${this.logTag}${label}: ${err.message}`);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+      }
+      if (!res.destroyed) {
+        res.end(JSON.stringify({ error: 'Upstream response error' }));
+      }
+    };
+    if (responseBody !== claudeResponse) {
+      claudeResponse.on('error', (err) => endWithUpstreamError(err, 'Claude response stream error'));
+    }
+
     if (contentType.includes('text/event-stream')) {
       Logger.headers('Outgoing response headers to client', res.getHeaders());
 
@@ -650,20 +666,15 @@ class ClaudeRequest {
         Logger.info(msg);
       };
 
-      claudeResponse.on('error', (err) => {
-        Logger.error(`${this.logTag}Claude SSE stream error: ${err.message}`);
-        if (!res.headersSent) {
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-        }
-        if (!res.destroyed) {
-          res.end(JSON.stringify({ error: 'Upstream response error' }));
-        }
-      });
+      responseBody.on('error', (err) => endWithUpstreamError(err, 'Claude SSE stream error'));
 
       res.on('close', () => {
         Logger.debug('Client disconnected, cleaning up streams');
         if (!claudeResponse.destroyed) {
           claudeResponse.destroy();
+        }
+        if (responseBody !== claudeResponse && !responseBody.destroyed) {
+          responseBody.destroy();
         }
       });
 
@@ -680,36 +691,28 @@ class ClaudeRequest {
           }
         });
 
-        claudeResponse.pipe(statsStream).pipe(debugStream).pipe(res);
+        responseBody.pipe(statsStream).pipe(debugStream).pipe(res);
         debugStream.on('end', () => {
           Logger.debug('\n');
           Logger.debug('Streaming response sent back to client');
           logStats();
         });
       } else {
-        claudeResponse.pipe(statsStream).pipe(res);
+        responseBody.pipe(statsStream).pipe(res);
         statsStream.on('end', () => {
           logStats();
         });
       }
     } else {
-      claudeResponse.setEncoding('utf8');
+      responseBody.setEncoding('utf8');
       let responseData = '';
-      claudeResponse.on('data', chunk => {
+      responseBody.on('data', chunk => {
         responseData += chunk;
       });
 
-      claudeResponse.on('error', (err) => {
-        Logger.error(`${this.logTag}Claude non-streaming response error:`, err);
-        if (!res.headersSent) {
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-        }
-        if (!res.destroyed) {
-          res.end(JSON.stringify({ error: 'Upstream error', message: err.message }));
-        }
-      });
+      responseBody.on('error', (err) => endWithUpstreamError(err, 'Claude non-streaming response error'));
 
-      claudeResponse.on('end', () => {
+      responseBody.on('end', () => {
         Logger.debug(`Non-streaming response (${claudeResponse.statusCode}): ${responseData.substring(0, 500)}`);
         try {
           const jsonData = JSON.parse(responseData);
